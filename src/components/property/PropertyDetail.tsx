@@ -469,71 +469,54 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   )
 }
 
-// ── City Market Panel with radius slider ──────────────────────────────────────
-const RADIUS_OPTIONS = [
-  { label: '0.25 mi', value: 0.25, desc: 'Immediate area' },
-  { label: '0.5 mi',  value: 0.5,  desc: 'Local neighbourhood' },
-  { label: '1 mi',    value: 1,    desc: 'Wider area' },
-  { label: '2 mi',    value: 2,    desc: 'District' },
-  { label: 'City',    value: 99,   desc: 'Whole city' },
-]
-
+// ── City Market Panel with city dropdown ──────────────────────────────────────
 function CityMarketPanel({ cityName, cityData }: { cityName: string; cityData: Record<string, number> }) {
-  const [radiusIdx, setRadiusIdx] = useState(4) // default: City
-  const selected = RADIUS_OPTIONS[radiusIdx]
-
-  // Scale market data based on radius — closer = tighter/more specific estimates
-  const scaleFactor = selected.value === 99 ? 1 : 0.85 + (selected.value / 99) * 0.15
-  const scaledPrice  = Math.round(cityData.avgPrice * scaleFactor)
-  const scaledYield  = parseFloat((cityData.avgYield * (2 - scaleFactor)).toFixed(1))
-  const scaledRent   = Math.round(cityData.avgRent * scaleFactor)
+  const [selectedCity, setSelectedCity] = useState(cityName)
+  const cities = Object.keys(MARKET_DATA.cities)
+  const data = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
 
   return (
     <div className="card p-5">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-4">
         <p className="stat-label">MARKET COMPARISON</p>
-        <span className="text-[10px] text-accent font-mono">{selected.label} — {selected.desc}</span>
+        <select
+          value={selectedCity}
+          onChange={e => setSelectedCity(e.target.value)}
+          className="bg-bg border border-border text-accent text-xs font-mono rounded-lg px-3 py-1.5 outline-none focus:border-accent cursor-pointer"
+        >
+          {cities.map(c => (
+            <option key={c} value={c}>{c}{c === cityName ? ' (this property)' : ''}</option>
+          ))}
+        </select>
       </div>
 
-      {/* Radius slider */}
-      <div className="mb-4">
-        <div className="flex justify-between mb-1.5">
-          {RADIUS_OPTIONS.map((r, i) => (
-            <button key={r.label} onClick={() => setRadiusIdx(i)}
-              className={`text-[10px] font-mono px-2 py-1 rounded transition-all ${
-                radiusIdx === i
-                  ? 'bg-accent/20 text-accent border border-accent/40'
-                  : 'text-dim hover:text-mid'
-              }`}>{r.label}</button>
-          ))}
+      {/* Indicator if comparing against a different city */}
+      {selectedCity !== cityName && (
+        <div className="mb-3 px-3 py-2 bg-gold/10 border border-gold/20 rounded-lg">
+          <p className="text-[10px] text-gold font-mono">
+            Comparing {cityName} property against {selectedCity} market
+          </p>
         </div>
-        <input type="range" min={0} max={4} step={1} value={radiusIdx}
-          onChange={e => setRadiusIdx(Number(e.target.value))}
-          className="w-full accent-accent" />
-        <div className="flex justify-between mt-1">
-          <span className="text-[9px] text-dim">Closest</span>
-          <span className="text-[9px] text-dim">Whole city</span>
-        </div>
-      </div>
+      )}
 
       {/* Market data */}
       {[
-        ['Comparison area', selected.value === 99 ? cityName : `Within ${selected.label} of property`],
-        ['Avg price', `£${scaledPrice.toLocaleString()}`],
-        ['Avg yield', `${scaledYield}%`],
-        ['1yr growth', `${cityData.capitalGrowth1yr > 0 ? '+' : ''}${cityData.capitalGrowth1yr}%`],
-        ['5yr growth', `+${cityData.capitalGrowth5yr}%`],
-        ['Avg rent', `£${scaledRent}/mo`],
+        ['City', selectedCity],
+        ['Avg price', `£${data.avgPrice.toLocaleString()}`],
+        ['Avg gross yield', `${data.avgYield}%`],
+        ['1yr capital growth', `${data.capitalGrowth1yr > 0 ? '+' : ''}${data.capitalGrowth1yr}%`],
+        ['5yr capital growth', `+${data.capitalGrowth5yr}%`],
+        ['Avg monthly rent', `£${data.avgRent}/mo`],
+        ['Tenant demand', `${data.demandScore}/100`],
+        ['Regen score', `${data.regenerationScore}/100`],
       ].map(([k, v]) => (
         <div key={k} className="flex justify-between py-1.5 border-b border-border text-sm">
           <span className="text-mid">{k}</span>
-          <span className="text-white font-medium">{v}</span>
+          <span className={`font-medium ${k === 'City' ? 'text-accent' : 'text-white'}`}>{v}</span>
         </div>
       ))}
       <p className="text-[10px] text-dim mt-3">
-        {selected.value === 99
-          ? `City-wide averages for ${cityName} — ONS/Land Registry 2026`
-          : `Estimated from ${cityName} city data scaled to ${selected.label} radius`}
+        Source: ONS HPI · Zoopla April 2026 · Land Registry · REalyse
       </p>
     </div>
   )
