@@ -172,7 +172,14 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                         <ScoreRing score={cityData.infrastructureScore} label="INFRA" />
                       </div>
                     </div>
-                    <CityMarketPanel cityName={cityName} cityData={cityData} /></div>
+                    <CityMarketPanel
+                      cityName={cityName}
+                      cityData={cityData}
+                      propertyPrice={price}
+                      propertyGrossYield={grossYield}
+                      propertyNetYield={netYield}
+                      propertyRent={effectiveRent}
+                    /></div>
                 )}
               </div>
 
@@ -479,55 +486,127 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   )
 }
 
-// ── City Market Panel with city dropdown ──────────────────────────────────────
-function CityMarketPanel({ cityName, cityData }: { cityName: string; cityData: Record<string, number> }) {
+// ── City Market Panel with city dropdown + direct comparison ─────────────────
+function CityMarketPanel({
+  cityName, cityData, propertyPrice, propertyGrossYield, propertyNetYield, propertyRent
+}: {
+  cityName: string
+  cityData: Record<string, number>
+  propertyPrice: number
+  propertyGrossYield: number
+  propertyNetYield: number
+  propertyRent: number
+}) {
   const [selectedCity, setSelectedCity] = useState(cityName)
   const cities = Object.keys(MARKET_DATA.cities)
   const data = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
+
+  const fmt = (v: number, prefix = '') => v ? `${prefix}£${v.toLocaleString()}` : '—'
+  const pct = (v: number) => v ? `${v.toFixed(1)}%` : '—'
+  const diff = (prop: number, city: number, higherIsBetter = true) => {
+    if (!prop || !city) return null
+    const d = prop - city
+    const better = higherIsBetter ? d > 0 : d < 0
+    return (
+      <span className={`text-[10px] ml-1.5 font-mono ${better ? 'text-accent' : 'text-danger'}`}>
+        {d > 0 ? '+' : ''}{d.toFixed(1)}{typeof city === 'number' && city < 100 ? '%' : ''}
+      </span>
+    )
+  }
 
   return (
     <div className="card p-5">
       <div className="flex items-center justify-between mb-4">
         <p className="stat-label">MARKET COMPARISON</p>
-        <select
-          value={selectedCity}
-          onChange={e => setSelectedCity(e.target.value)}
-          className="bg-bg border border-border text-accent text-xs font-mono rounded-lg px-3 py-1.5 outline-none focus:border-accent cursor-pointer"
-        >
+        <select value={selectedCity} onChange={e => setSelectedCity(e.target.value)}
+          className="bg-bg border border-border text-accent text-xs font-mono rounded-lg px-3 py-1.5 outline-none focus:border-accent cursor-pointer">
           {cities.map(c => (
-            <option key={c} value={c}>{c}{c === cityName ? ' (this property)' : ''}</option>
+            <option key={c} value={c}>{c}{c === cityName ? ' ★' : ''}</option>
           ))}
         </select>
       </div>
 
-      {/* Indicator if comparing against a different city */}
       {selectedCity !== cityName && (
         <div className="mb-3 px-3 py-2 bg-gold/10 border border-gold/20 rounded-lg">
-          <p className="text-[10px] text-gold font-mono">
-            Comparing {cityName} property against {selectedCity} market
-          </p>
+          <p className="text-[10px] text-gold font-mono">Comparing {cityName} property vs {selectedCity} market</p>
         </div>
       )}
 
-      {/* Market data */}
-      {[
-        ['City', selectedCity],
-        ['Avg price', `£${data.avgPrice.toLocaleString()}`],
-        ['Avg gross yield', `${data.avgYield}%`],
-        ['1yr capital growth', `${data.capitalGrowth1yr > 0 ? '+' : ''}${data.capitalGrowth1yr}%`],
-        ['5yr capital growth', `+${data.capitalGrowth5yr}%`],
-        ['Avg monthly rent', `£${data.avgRent}/mo`],
-        ['Tenant demand', `${data.demandScore}/100`],
-        ['Regen score', `${data.regenerationScore}/100`],
-      ].map(([k, v]) => (
-        <div key={k} className="flex justify-between py-1.5 border-b border-border text-sm">
-          <span className="text-mid">{k}</span>
-          <span className={`font-medium ${k === 'City' ? 'text-accent' : 'text-white'}`}>{v}</span>
+      {/* Comparison table — This property vs City average */}
+      <div className="overflow-hidden rounded-xl border border-border">
+        {/* Header */}
+        <div className="grid grid-cols-3 bg-white/5 px-3 py-2 border-b border-border">
+          <span className="text-[10px] font-mono text-dim">METRIC</span>
+          <span className="text-[10px] font-mono text-accent text-center">THIS PROPERTY</span>
+          <span className="text-[10px] font-mono text-mid text-right">{selectedCity} AVG</span>
         </div>
-      ))}
-      <p className="text-[10px] text-dim mt-3">
-        Source: ONS HPI · Zoopla April 2026 · Land Registry · REalyse
-      </p>
+
+        {[
+          {
+            label: 'Price',
+            prop: propertyPrice ? fmt(propertyPrice) : '—',
+            city: fmt(data.avgPrice),
+            propRaw: propertyPrice,
+            cityRaw: data.avgPrice,
+            higherIsBetter: false,
+          },
+          {
+            label: 'Gross yield',
+            prop: pct(propertyGrossYield),
+            city: pct(data.avgYield),
+            propRaw: propertyGrossYield,
+            cityRaw: data.avgYield,
+            higherIsBetter: true,
+            isPct: true,
+          },
+          {
+            label: 'Net yield',
+            prop: pct(propertyNetYield),
+            city: '—',
+            propRaw: propertyNetYield,
+            cityRaw: 0,
+            higherIsBetter: true,
+          },
+          {
+            label: 'Monthly rent',
+            prop: propertyRent ? `£${propertyRent.toLocaleString()}` : 'Set rent',
+            city: `£${data.avgRent.toLocaleString()}`,
+            propRaw: propertyRent,
+            cityRaw: data.avgRent,
+            higherIsBetter: true,
+          },
+          {
+            label: '1yr growth',
+            prop: `${data.capitalGrowth1yr > 0 ? '+' : ''}${data.capitalGrowth1yr}%`,
+            city: `${data.capitalGrowth1yr > 0 ? '+' : ''}${data.capitalGrowth1yr}%`,
+            propRaw: 0,
+            cityRaw: 0,
+            higherIsBetter: true,
+          },
+          {
+            label: '5yr growth',
+            prop: `+${data.capitalGrowth5yr}%`,
+            city: `+${data.capitalGrowth5yr}%`,
+            propRaw: 0,
+            cityRaw: 0,
+            higherIsBetter: true,
+          },
+        ].map((row, i) => (
+          <div key={row.label}
+            className={`grid grid-cols-3 px-3 py-2.5 border-b border-border last:border-0 text-sm ${i % 2 === 0 ? '' : 'bg-white/[0.02]'}`}>
+            <span className="text-mid text-xs">{row.label}</span>
+            <span className="text-accent font-semibold text-center text-xs">
+              {row.prop}
+              {row.propRaw && row.cityRaw && row.isPct
+                ? diff(row.propRaw, row.cityRaw, row.higherIsBetter)
+                : null}
+            </span>
+            <span className="text-white text-right text-xs">{row.city}</span>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[10px] text-dim mt-3">Source: ONS HPI · Zoopla April 2026 · Land Registry · REalyse</p>
     </div>
   )
 }
