@@ -38,6 +38,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   const effectiveRent = rentSet ? rent : (enriched?.estimatedRent as number || 0)
   const price = Number(p?.last_sold_price ?? 0)
 
+  // Estimated current value using 5yr avg annual growth
+  const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
+  const yearsHeld = Math.max(0, 2026 - soldYear)
+  const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
+  const estimatedCurrentValue = price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0
+
   // Live-calculated metrics
   const grossYield = price && effectiveRent ? parseFloat(((effectiveRent * 12 / price) * 100).toFixed(2)) : 0
   const netYield = price && effectiveRent ? parseFloat((
@@ -99,19 +105,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
         {/* Key metrics strip */}
         <div className="p-5 grid grid-cols-2 sm:grid-cols-5 gap-3 border-b border-border">
           <Stat label="EST. CURRENT VALUE"
-            value={(() => {
-              if (!price) return 'No record'
-              const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
-              const yearsHeld = Math.max(0, 2026 - soldYear)
-              // Use 5yr growth rate averaged annually — more realistic than recent 1yr figure
-              const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
-              const estimated = Math.round(price * Math.pow(1 + annualGrowth, yearsHeld))
-              return `£${estimated.toLocaleString()}`
-            })()}
+            value={estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : 'No record'}
             tone="green"
-            sub={price && p?.last_sold_date
-              ? `Est. from ${String(p.last_sold_date).slice(0,4)} sale price`
-              : 'Based on market growth'} />
+            sub={price && p?.last_sold_date ? `Est. from ${String(p.last_sold_date).slice(0,4)} sale price` : 'Based on market growth'} />
           <Stat label="LAST SOLD PRICE" value={price ? `£${price.toLocaleString()}` : 'No record'}
             sub={p?.last_sold_date ? `Sold ${String(p.last_sold_date).slice(0,4)}` : undefined} />
           <Stat label="GROSS YIELD" value={grossYield ? `${grossYield}%` : 'Set rent →'}
@@ -176,6 +172,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                       cityName={cityName}
                       cityData={cityData}
                       propertyPrice={price}
+                      estimatedCurrentValue={estimatedCurrentValue}
                       propertyGrossYield={grossYield}
                       propertyNetYield={netYield}
                       propertyRent={effectiveRent}
@@ -488,11 +485,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
 
 // ── City Market Panel with city dropdown + direct comparison ─────────────────
 function CityMarketPanel({
-  cityName, cityData, propertyPrice, propertyGrossYield, propertyNetYield, propertyRent
+  cityName, cityData, propertyPrice, estimatedCurrentValue, propertyGrossYield, propertyNetYield, propertyRent
 }: {
   cityName: string
   cityData: Record<string, number>
   propertyPrice: number
+  estimatedCurrentValue: number
   propertyGrossYield: number
   propertyNetYield: number
   propertyRent: number
@@ -501,7 +499,10 @@ function CityMarketPanel({
   const cities = Object.keys(MARKET_DATA.cities)
   const data = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
 
-  const fmt = (v: number, prefix = '') => v ? `${prefix}£${v.toLocaleString()}` : '—'
+  // Use estimated current value for price comparison
+  const displayPrice = estimatedCurrentValue || propertyPrice
+
+  const fmt = (v: number) => v ? `£${v.toLocaleString()}` : '—'
   const pct = (v: number) => v ? `${v.toFixed(1)}%` : '—'
   const diff = (prop: number, city: number, higherIsBetter = true) => {
     if (!prop || !city) return null
@@ -509,7 +510,7 @@ function CityMarketPanel({
     const better = higherIsBetter ? d > 0 : d < 0
     return (
       <span className={`text-[10px] ml-1.5 font-mono ${better ? 'text-accent' : 'text-danger'}`}>
-        {d > 0 ? '+' : ''}{d.toFixed(1)}{typeof city === 'number' && city < 100 ? '%' : ''}
+        {d > 0 ? '+' : ''}{d.toFixed(1)}{city < 100 ? '%' : ''}
       </span>
     )
   }
@@ -543,12 +544,14 @@ function CityMarketPanel({
 
         {[
           {
-            label: 'Price',
-            prop: propertyPrice ? fmt(propertyPrice) : '—',
+            label: 'Est. value',
+            sublabel: estimatedCurrentValue ? '(estimated)' : '(last sold)',
+            prop: fmt(displayPrice),
             city: fmt(data.avgPrice),
-            propRaw: propertyPrice,
-            cityRaw: data.avgPrice,
+            propRaw: 0,
+            cityRaw: 0,
             higherIsBetter: false,
+            isPct: false,
           },
           {
             label: 'Gross yield',
@@ -594,7 +597,12 @@ function CityMarketPanel({
         ].map((row, i) => (
           <div key={row.label}
             className={`grid grid-cols-3 px-3 py-2.5 border-b border-border last:border-0 text-sm ${i % 2 === 0 ? '' : 'bg-white/[0.02]'}`}>
-            <span className="text-mid text-xs">{row.label}</span>
+            <div>
+              <span className="text-mid text-xs">{row.label}</span>
+              {'sublabel' in row && row.sublabel && (
+                <span className="text-[9px] text-dim ml-1">{row.sublabel}</span>
+              )}
+            </div>
             <span className="text-accent font-semibold text-center text-xs">
               {row.prop}
               {row.propRaw && row.cityRaw && row.isPct
@@ -606,7 +614,9 @@ function CityMarketPanel({
         ))}
       </div>
 
-      <p className="text-[10px] text-dim mt-3">Source: ONS HPI · Zoopla April 2026 · Land Registry · REalyse</p>
+      <p className="text-[10px] text-dim mt-3">
+        Est. value uses 5yr avg growth from last sold price · ONS HPI · Zoopla April 2026 · REalyse
+      </p>
     </div>
   )
 }
