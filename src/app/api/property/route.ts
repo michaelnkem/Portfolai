@@ -36,29 +36,33 @@ export async function GET(req: NextRequest) {
         getRisks(uprn).catch(() => []),
       ])
 
-      if (!property) {
-        return NextResponse.json({ error: 'Property not found' }, { status: 404 })
-      }
+      // Build a property object even if the API returned minimal data
+      const prop = property || { uprn, full_address: `UPRN ${uprn}`, address: `UPRN ${uprn}` }
 
-      const cityName = detectCity(property.town_name || '', property.postcode || '')
+      const cityName = detectCity(
+        String((prop as Record<string,unknown>).town_name || ''),
+        String((prop as Record<string,unknown>).postcode || '')
+      )
       const cityData = MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities]
         || MARKET_DATA.cities.London
 
+      const propRecord = prop as Record<string, unknown>
+
       const defaults = {
-        serviceCharge: property.property_type?.toLowerCase().includes('flat') ? 2000 : 0,
-        groundRent: property.tenure?.toLowerCase().includes('leasehold') ? 200 : 0,
+        serviceCharge: String(propRecord.property_type || '').toLowerCase().includes('flat') ? 2000 : 0,
+        groundRent: String(propRecord.tenure || '').toLowerCase().includes('leasehold') ? 200 : 0,
         managementFee: 10,
         maintenanceAllowance: 1.5,
         voidWeeks: 2,
       }
 
       const estimatedRent = estimateRent(
-        property.property_type || '',
-        property.bedrooms || 1,
+        String(propRecord.property_type || ''),
+        Number(propRecord.bedrooms || 1),
         cityData.avgRent,
       )
 
-      const price = property.last_sold_price || 0
+      const price = Number(propRecord.last_sold_price || 0)
       const grossYield = price ? calcGrossYield(price, estimatedRent) : 0
       const netYield = price ? calcNetYield(
         price, estimatedRent,
@@ -66,14 +70,14 @@ export async function GET(req: NextRequest) {
         defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
       ) : 0
 
-      const floodRisk = risks.find((r: {risk_type: string}) => r.risk_type === 'flood_rivers_sea')
+      const floodRisk = (risks || []).find((r: Record<string,unknown>) => r.risk_type === 'flood_rivers_sea')
 
       return NextResponse.json({
         uprn,
-        property,
+        property: prop,
         epc,
         transactions: (transactions || []).slice(0, 20),
-        risks,
+        risks: risks || [],
         cityData,
         cityName,
         enriched: {
@@ -87,10 +91,10 @@ export async function GET(req: NextRequest) {
           ) : 0,
           capitalGrowth: cityData.capitalGrowth1yr,
           totalROI: parseFloat((netYield + cityData.capitalGrowth1yr).toFixed(1)),
-          floodRisk: floodRisk ? (floodRisk as {label: string}).label : 'Unknown',
+          floodRisk: floodRisk ? String((floodRisk as Record<string,unknown>).label) : 'Unknown',
           epcRating: epc?.current_energy_efficiency
             ? efficiencyToRating(epc.current_energy_efficiency)
-            : property.current_energy_rating || 'Unknown',
+            : String(propRecord.current_energy_rating || 'Unknown'),
           defaults,
         },
       })
