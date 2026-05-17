@@ -176,6 +176,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                       propertyGrossYield={grossYield}
                       propertyNetYield={netYield}
                       propertyRent={effectiveRent}
+                      propertyBeds={Number(p?.bedrooms ?? 2)}
                     /></div>
                 )}
               </div>
@@ -485,7 +486,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
 
 // ── City Market Panel with city dropdown + direct comparison ─────────────────
 function CityMarketPanel({
-  cityName, cityData, propertyPrice, estimatedCurrentValue, propertyGrossYield, propertyNetYield, propertyRent
+  cityName, cityData, propertyPrice, estimatedCurrentValue, propertyGrossYield, propertyNetYield, propertyRent, propertyBeds
 }: {
   cityName: string
   cityData: Record<string, number>
@@ -494,13 +495,29 @@ function CityMarketPanel({
   propertyGrossYield: number
   propertyNetYield: number
   propertyRent: number
+  propertyBeds: number
 }) {
   const [selectedCity, setSelectedCity] = useState(cityName)
-  const cities = Object.keys(MARKET_DATA.cities)
-  const data = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
+  const bedroomKey = (beds: number) => beds === 0 ? 'studio' : `${beds}bed`
+  const defaultBedKey = bedroomKey(propertyBeds)
+  const [selectedBed, setSelectedBed] = useState(defaultBedKey)
 
-  // Use estimated current value for price comparison
+  const cities = Object.keys(MARKET_DATA.cities)
+  const cityAvg = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
+  const bedroomData = (MARKET_DATA.cityByBedroom as Record<string, Record<string, { avgPrice: number; avgRent: number; avgYield: number }>>)[selectedCity]?.[selectedBed]
+
+  const compAvgPrice = bedroomData?.avgPrice ?? cityAvg.avgPrice
+  const compAvgRent  = bedroomData?.avgRent  ?? cityAvg.avgRent
+  const compAvgYield = bedroomData?.avgYield ?? cityAvg.avgYield
   const displayPrice = estimatedCurrentValue || propertyPrice
+
+  const BEDS = [
+    { key: 'studio', label: 'Studio' },
+    { key: '1bed',   label: '1 Bed' },
+    { key: '2bed',   label: '2 Bed' },
+    { key: '3bed',   label: '3 Bed' },
+    { key: '4bed',   label: '4 Bed' },
+  ]
 
   const fmt = (v: number) => v ? `£${v.toLocaleString()}` : '—'
   const pct = (v: number) => v ? `${v.toFixed(1)}%` : '—'
@@ -517,7 +534,7 @@ function CityMarketPanel({
 
   return (
     <div className="card p-5">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3">
         <p className="stat-label">MARKET COMPARISON</p>
         <select value={selectedCity} onChange={e => setSelectedCity(e.target.value)}
           className="bg-bg border border-border text-accent text-xs font-mono rounded-lg px-3 py-1.5 outline-none focus:border-accent cursor-pointer">
@@ -527,87 +544,84 @@ function CityMarketPanel({
         </select>
       </div>
 
+      {/* Bedroom filter pills */}
+      <div className="flex gap-1.5 mb-4 flex-wrap items-center">
+        {BEDS.map(b => (
+          <button key={b.key} onClick={() => setSelectedBed(b.key)}
+            className={`px-3 py-1 rounded-lg text-[11px] font-mono transition-all ${
+              selectedBed === b.key
+                ? 'bg-accent/20 border border-accent/40 text-accent'
+                : 'bg-white/[0.03] border border-border text-dim hover:text-mid'
+            }`}>
+            {b.label}
+            {b.key === defaultBedKey && <span className="ml-1 text-[9px] text-accent/50">★</span>}
+          </button>
+        ))}
+        <span className="ml-auto text-[9px] text-dim">★ matches this property</span>
+      </div>
+
       {selectedCity !== cityName && (
         <div className="mb-3 px-3 py-2 bg-gold/10 border border-gold/20 rounded-lg">
           <p className="text-[10px] text-gold font-mono">Comparing {cityName} property vs {selectedCity} market</p>
         </div>
       )}
 
-      {/* Comparison table — This property vs City average */}
+      {/* Comparison table */}
       <div className="overflow-hidden rounded-xl border border-border">
-        {/* Header */}
         <div className="grid grid-cols-3 bg-white/5 px-3 py-2 border-b border-border">
           <span className="text-[10px] font-mono text-dim">METRIC</span>
           <span className="text-[10px] font-mono text-accent text-center">THIS PROPERTY</span>
-          <span className="text-[10px] font-mono text-mid text-right">{selectedCity} AVG</span>
+          <span className="text-[10px] font-mono text-mid text-right">
+            {BEDS.find(b => b.key === selectedBed)?.label} {selectedCity}
+          </span>
         </div>
 
         {[
           {
-            label: 'Est. value',
-            sublabel: estimatedCurrentValue ? '(estimated)' : '(last sold)',
-            prop: fmt(displayPrice),
-            city: fmt(data.avgPrice),
-            propRaw: 0,
-            cityRaw: 0,
-            higherIsBetter: false,
-            isPct: false,
+            label: 'Est. value', sublabel: estimatedCurrentValue ? '(est.)' : '(last sold)',
+            prop: fmt(displayPrice), city: fmt(compAvgPrice),
+            propRaw: 0, cityRaw: 0, higherIsBetter: false, isPct: false,
           },
           {
-            label: 'Gross yield',
-            prop: pct(propertyGrossYield),
-            city: pct(data.avgYield),
-            propRaw: propertyGrossYield,
-            cityRaw: data.avgYield,
-            higherIsBetter: true,
-            isPct: true,
+            label: 'Gross yield', sublabel: undefined,
+            prop: pct(propertyGrossYield), city: pct(compAvgYield),
+            propRaw: propertyGrossYield, cityRaw: compAvgYield,
+            higherIsBetter: true, isPct: true,
           },
           {
-            label: 'Net yield',
-            prop: pct(propertyNetYield),
-            city: '—',
-            propRaw: propertyNetYield,
-            cityRaw: 0,
-            higherIsBetter: true,
+            label: 'Net yield', sublabel: undefined,
+            prop: pct(propertyNetYield), city: '—',
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
           },
           {
-            label: 'Monthly rent',
+            label: 'Monthly rent', sublabel: undefined,
             prop: propertyRent ? `£${propertyRent.toLocaleString()}` : 'Set rent',
-            city: `£${data.avgRent.toLocaleString()}`,
-            propRaw: propertyRent,
-            cityRaw: data.avgRent,
-            higherIsBetter: true,
+            city: fmt(compAvgRent),
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
           },
           {
-            label: '1yr growth',
-            prop: `${data.capitalGrowth1yr > 0 ? '+' : ''}${data.capitalGrowth1yr}%`,
-            city: `${data.capitalGrowth1yr > 0 ? '+' : ''}${data.capitalGrowth1yr}%`,
-            propRaw: 0,
-            cityRaw: 0,
-            higherIsBetter: true,
+            label: '1yr growth', sublabel: undefined,
+            prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`,
+            city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`,
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
           },
           {
-            label: '5yr growth',
-            prop: `+${data.capitalGrowth5yr}%`,
-            city: `+${data.capitalGrowth5yr}%`,
-            propRaw: 0,
-            cityRaw: 0,
-            higherIsBetter: true,
+            label: '5yr growth', sublabel: undefined,
+            prop: `+${cityAvg.capitalGrowth5yr}%`,
+            city: `+${cityAvg.capitalGrowth5yr}%`,
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
           },
         ].map((row, i) => (
           <div key={row.label}
-            className={`grid grid-cols-3 px-3 py-2.5 border-b border-border last:border-0 text-sm ${i % 2 === 0 ? '' : 'bg-white/[0.02]'}`}>
+            className={`grid grid-cols-3 px-3 py-2.5 border-b border-border last:border-0 ${i % 2 === 0 ? '' : 'bg-white/[0.02]'}`}>
             <div>
               <span className="text-mid text-xs">{row.label}</span>
-              {'sublabel' in row && row.sublabel && (
-                <span className="text-[9px] text-dim ml-1">{row.sublabel}</span>
-              )}
+              {row.sublabel && <span className="text-[9px] text-dim ml-1">{row.sublabel}</span>}
             </div>
             <span className="text-accent font-semibold text-center text-xs">
               {row.prop}
-              {row.propRaw && row.cityRaw && row.isPct
-                ? diff(row.propRaw, row.cityRaw, row.higherIsBetter)
-                : null}
+              {row.isPct && row.propRaw && row.cityRaw
+                ? diff(row.propRaw, row.cityRaw, row.higherIsBetter) : null}
             </span>
             <span className="text-white text-right text-xs">{row.city}</span>
           </div>
@@ -615,7 +629,9 @@ function CityMarketPanel({
       </div>
 
       <p className="text-[10px] text-dim mt-3">
-        Est. value uses 5yr avg growth from last sold price · ONS HPI · Zoopla April 2026 · REalyse
+        {bedroomData
+          ? `${BEDS.find(b => b.key === selectedBed)?.label} avg for ${selectedCity} · Zoopla 2026 · REalyse`
+          : `City-wide avg for ${selectedCity} · ONS HPI · Zoopla April 2026`}
       </p>
     </div>
   )
