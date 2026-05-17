@@ -20,7 +20,7 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
   const debounceRef = useRef<NodeJS.Timeout>()
 
   const searchAddresses = useCallback(async (q: string) => {
-    if (q.length < 4) { setSuggestions([]); setNoResults(false); return }
+    if (q.length < 3) { setSuggestions([]); setNoResults(false); return }
     setLoading(true)
     setNoResults(false)
     try {
@@ -28,8 +28,8 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
       const data = await res.json()
       const results = data.suggestions || []
       setSuggestions(results)
-      setShowSuggestions(true)
-      if (results.length === 0) setNoResults(true)
+      setShowSuggestions(results.length > 0)
+      if (results.length === 0 && q.length >= 5) setNoResults(true)
     } catch { setSuggestions([]) }
     setLoading(false)
   }, [])
@@ -45,7 +45,7 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
     if (suggestions.length > 0) {
       // Select first suggestion automatically
       await fetchProperty(suggestions[0])
-    } else if (query.length >= 4) {
+    } else if (query.length >= 3) {
       // Force a fresh search
       await searchAddresses(query)
     }
@@ -81,9 +81,6 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
         <h2 className="font-display font-black text-3xl text-white mb-1">
           Search any UK property
         </h2>
-        <p className="text-mid text-sm">
-          Powered by Homedata · Land Registry · EPC Register · 29M properties
-        </p>
       </div>
 
       {/* Search input */}
@@ -106,7 +103,7 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
           {/* Search button */}
           <button
             onClick={handleEnter}
-            disabled={query.length < 4 || !!loadingUprn}
+            disabled={query.length < 3 || !!loadingUprn}
             className="btn-primary px-6 text-sm disabled:opacity-40 shrink-0"
           >
             Search
@@ -142,7 +139,7 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
         )}
 
         {/* No results message */}
-        {noResults && !loading && query.length >= 4 && (
+        {noResults && !loading && query.length >= 3 && (
           <div className="absolute top-full left-0 right-[88px] mt-2 bg-panel border border-border rounded-2xl overflow-hidden z-40 shadow-2xl shadow-black/50 px-4 py-4">
             <p className="text-sm text-white mb-1">No exact matches found for <strong className="text-accent">"{query}"</strong></p>
             <p className="text-xs text-mid mb-3">Try a more specific address, postcode or street name.</p>
