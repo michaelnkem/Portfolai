@@ -9,7 +9,6 @@ import { AIAdvisor } from '@/components/ai/AIAdvisor'
 import { MarketIntel } from '@/components/property/MarketIntel'
 import { Portfolio } from '@/components/property/Portfolio'
 import { ROICalculator } from '@/components/property/ROICalculator'
-import { SetupBanner } from '@/components/ui/SetupBanner'
 import { MARKET_DATA } from '@/lib/market-data'
 
 export type Tab = 'search' | 'market' | 'portfolio' | 'calculator'
@@ -39,8 +38,6 @@ export default function Home() {
       <Navbar tab={tab} setTab={setTab} onAI={() => openAI(null)} portfolioCount={portfolio.length} />
 
       <HeroStats marketData={MARKET_DATA} />
-
-      <SetupBanner />
 
       <main className="max-w-[1320px] mx-auto px-6 py-8">
         {tab === 'search' && (
