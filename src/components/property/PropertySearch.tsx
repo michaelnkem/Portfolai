@@ -275,12 +275,12 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
 
 function ExampleProperties({ onSearch }: { onSearch: (q: string) => void }) {
   const examples = [
-    { label: 'Manchester city centre', query: 'Deansgate Manchester M3' },
-    { label: 'Liverpool Baltic Triangle', query: 'Jamaica Street Liverpool L1' },
-    { label: 'Birmingham Jewellery Quarter', query: 'Vyse Street Birmingham B18' },
-    { label: 'Leeds HMO corridor', query: 'Meanwood Road Leeds LS7' },
-    { label: 'Sheffield student zone', query: 'Ecclesall Road Sheffield S11' },
-    { label: 'London Zone 4', query: 'Barking Riverside London IG11' },
+    { label: 'Manchester city centre', query: 'M3 4LQ' },
+    { label: 'Liverpool Baltic Triangle', query: 'L1 0AH' },
+    { label: 'Birmingham Jewellery Quarter', query: 'B18 6NF' },
+    { label: 'Leeds HMO corridor', query: 'LS7 4LA' },
+    { label: 'Sheffield student zone', query: 'S11 8QQ' },
+    { label: 'London Zone 4', query: 'IG11 7BT' },
   ]
   return (
     <div>
