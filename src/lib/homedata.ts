@@ -91,10 +91,10 @@ export async function searchAddress(query: string): Promise<AddressSuggestion[]>
   return data.suggestions || data.results || []
 }
 
-// Full property record by UPRN (1 call)
+// Full property record by UPRN — correct endpoint is /api/address/retrieve/{uprn}/
 export async function getProperty(uprn: string): Promise<PropertyRecord | null> {
   const res = await fetch(
-    `${HOMEDATA_BASE}/api/properties/${uprn}`,
+    `${HOMEDATA_BASE}/api/address/retrieve/${uprn}/?level=property`,
     { headers: headers(), cache: 'no-store' },
   )
   if (!res.ok) {
@@ -104,45 +104,44 @@ export async function getProperty(uprn: string): Promise<PropertyRecord | null> 
   const data = await res.json()
   console.log('getProperty response keys:', Object.keys(data).slice(0, 10))
   // Handle all known response shapes
-  if (data.uprn) return data            // direct property object
-  if (data.data?.uprn) return data.data // wrapped in .data
-  if (data.property?.uprn) return data.property // wrapped in .property
-  if (data.results?.[0]?.uprn) return data.results[0] // wrapped in .results[]
-  // Return whatever we got — let the caller handle it
-  console.log('getProperty: unexpected shape, returning raw data')
+  if (data.uprn) return data
+  if (data.data?.uprn) return data.data
+  if (data.property?.uprn) return data.property
+  if (data.results?.[0]?.uprn) return data.results[0]
   return data
 }
 
-// EPC data by UPRN (1 call)
+// EPC data by UPRN
 export async function getEpc(uprn: string): Promise<EpcData | null> {
   const res = await fetch(
-    `${HOMEDATA_BASE}/api/epc-checker/${uprn}/`,
-    { headers: headers(), next: { revalidate: 86400 } },
+    `${HOMEDATA_BASE}/api/epc/${uprn}/`,
+    { headers: headers(), cache: 'no-store' },
   )
   if (!res.ok) return null
-  return res.json()
+  const data = await res.json()
+  return data.data || data
 }
 
-// Environmental risks (1 call)
+// Environmental risks
 export async function getRisks(uprn: string): Promise<RiskResult[]> {
   const res = await fetch(
     `${HOMEDATA_BASE}/api/risks/all/?uprn=${uprn}`,
-    { headers: headers(), next: { revalidate: 86400 } },
+    { headers: headers(), cache: 'no-store' },
   )
   if (!res.ok) return []
   const data = await res.json()
-  return data.results || []
+  return data.results || data.risks || []
 }
 
-// Transaction history (1 call)
+// Transaction history
 export async function getTransactions(uprn: string): Promise<SaleRecord[]> {
   const res = await fetch(
-    `${HOMEDATA_BASE}/api/properties/${uprn}/transactions/`,
-    { headers: headers(), next: { revalidate: 3600 } },
+    `${HOMEDATA_BASE}/api/transactions/?uprn=${uprn}`,
+    { headers: headers(), cache: 'no-store' },
   )
   if (!res.ok) return []
   const data = await res.json()
-  return data.results || data.transactions || []
+  return data.results || data.transactions || data.data || []
 }
 
 // Price trends by outcode (1 call)
