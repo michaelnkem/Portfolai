@@ -95,17 +95,48 @@ export async function GET(req: NextRequest) {
 }
 
 function detectCity(town: string, postcode: string): string {
-  const t = town.toLowerCase()
-  const pc = postcode.toUpperCase()
-  if (t.includes('manchester') || t.includes('salford') || pc.startsWith('M') || pc.startsWith('SK')) return 'Manchester'
-  if (t.includes('birmingham') || pc.startsWith('B') || pc.startsWith('B1') || pc.startsWith('B2')) return 'Birmingham'
-  if (t.includes('liverpool') || pc.startsWith('L') ) return 'Liverpool'
-  if (t.includes('leeds') || pc.startsWith('LS')) return 'Leeds'
-  if (t.includes('sheffield') || pc.startsWith('S') || pc.startsWith('S1')) return 'Sheffield'
-  if (t.includes('nottingham') || pc.startsWith('NG')) return 'Nottingham'
-  if (t.includes('bristol') || pc.startsWith('BS')) return 'Bristol'
-  if (t.includes('london') || ['E','EC','N','NW','SE','SW','W','WC'].some(p => pc.startsWith(p))) return 'London'
-  return 'Manchester' // default to northern city data
+  const t = (town || '').toLowerCase()
+  const pc = (postcode || '').toUpperCase().trim()
+
+  // Extract outward code (first part before space e.g. "SW1A" from "SW1A 1AA")
+  const outward = pc.split(' ')[0]
+
+  // London MUST be checked first — its prefixes overlap with other cities
+  // London outward codes: E, EC, N, NW, SE, SW, W, WC, BR, CR, DA, EN, HA, IG, KT, RM, SM, TN, TW, UB, WD
+  const londonPrefixes = ['EC','WC','SW','SE','NW','W1','W2','W3','W4','W5','W6','W7','W8','W9','N1','N2','N3','N4','N5','N6','N7','N8','N9','E1','E2','E3','E4','E5','E6','E7','E8','E9','BR','CR','DA','EN','HA','IG','KT','RM','SM','TW','UB','WD']
+  const londonSinglePrefixes = ['E','N','W']
+
+  if (
+    t.includes('london') ||
+    londonPrefixes.some(p => outward.startsWith(p)) ||
+    londonSinglePrefixes.some(p => outward.startsWith(p) && outward.length >= 2)
+  ) return 'London'
+
+  // Bristol — BS postcodes
+  if (t.includes('bristol') || outward.startsWith('BS')) return 'Bristol'
+
+  // Nottingham — NG postcodes
+  if (t.includes('nottingham') || outward.startsWith('NG')) return 'Nottingham'
+
+  // Leeds — LS postcodes (must be before Sheffield S check)
+  if (t.includes('leeds') || outward.startsWith('LS')) return 'Leeds'
+
+  // Sheffield — S postcodes (after Leeds LS check)
+  if (t.includes('sheffield') || (outward.startsWith('S') && !outward.startsWith('SK') && !outward.startsWith('SM'))) return 'Sheffield'
+
+  // Liverpool — L postcodes (must be before London check caught it)
+  if (t.includes('liverpool') || (outward.startsWith('L') && !outward.startsWith('LS'))) return 'Liverpool'
+
+  // Birmingham — B postcodes
+  if (t.includes('birmingham') || t.includes('solihull') || t.includes('wolverhampton') ||
+    (outward.startsWith('B') && !outward.startsWith('BR') && !outward.startsWith('BS'))) return 'Birmingham'
+
+  // Manchester — M and SK postcodes
+  if (t.includes('manchester') || t.includes('salford') || t.includes('stockport') ||
+    outward.startsWith('M') || outward.startsWith('SK')) return 'Manchester'
+
+  // Default — use London if postcode unrecognised (safer for unknown UK properties)
+  return 'London'
 }
 
 function estimateRent(propertyType: string, beds: number, cityAvgRent: number): number {
