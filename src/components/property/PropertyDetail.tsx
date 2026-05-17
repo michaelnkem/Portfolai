@@ -99,9 +99,19 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
         {/* Key metrics strip */}
         <div className="p-5 grid grid-cols-2 sm:grid-cols-5 gap-3 border-b border-border">
           <Stat label="EST. CURRENT VALUE"
-            value={price ? `£${Math.round(price * Math.pow(1 + capitalGrowth / 100, (new Date().getFullYear() - Number(String(p?.last_sold_date ?? '2020').slice(0,4))))).toLocaleString()}` : 'No record'}
+            value={(() => {
+              if (!price) return 'No record'
+              const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
+              const yearsHeld = Math.max(0, 2026 - soldYear)
+              // Use 5yr growth rate averaged annually — more realistic than recent 1yr figure
+              const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
+              const estimated = Math.round(price * Math.pow(1 + annualGrowth, yearsHeld))
+              return `£${estimated.toLocaleString()}`
+            })()}
             tone="green"
-            sub={price && p?.last_sold_date ? `Based on ${capitalGrowth}% annual growth` : 'Add last sold date'} />
+            sub={price && p?.last_sold_date
+              ? `Est. from ${String(p.last_sold_date).slice(0,4)} sale price`
+              : 'Based on market growth'} />
           <Stat label="LAST SOLD PRICE" value={price ? `£${price.toLocaleString()}` : 'No record'}
             sub={p?.last_sold_date ? `Sold ${String(p.last_sold_date).slice(0,4)}` : undefined} />
           <Stat label="GROSS YIELD" value={grossYield ? `${grossYield}%` : 'Set rent →'}
