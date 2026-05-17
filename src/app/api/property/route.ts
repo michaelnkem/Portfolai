@@ -107,29 +107,30 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ error: 'Provide q (search) or uprn' }, { status: 400 })
 }
 
-// ── Raw address search with full response logging ─────────────────────────────
+// ── Raw address search ────────────────────────────────────────────────────────
+// Public endpoint — no API key needed. Returns suggestions[]{uprn, address, postcode, town}
 async function searchAddressRaw(query: string): Promise<unknown> {
   const url = `https://api.homedata.co.uk/api/address/find/?q=${encodeURIComponent(query)}`
   const res = await fetch(url, {
     headers: { Authorization: `Api-Key ${process.env.HOMEDATA_API_KEY}` },
-    next: { revalidate: 60 },
+    cache: 'no-store',
   })
   if (!res.ok) {
     console.error('Homedata search failed:', res.status, await res.text())
-    return []
+    return { suggestions: [] }
   }
   const data = await res.json()
-  console.log('Homedata raw response keys:', Object.keys(data))
+  console.log('Homedata search response keys:', Object.keys(data), 'count:', data.count)
   return data
 }
 
-// ── Normalise any Homedata response shape into our standard suggestion format ─
+// ── Normalise Homedata suggestions into consistent shape ──────────────────────
+// Homedata returns: { suggestions: [{uprn, address, postcode, town}], count }
+// We normalise to: { uprn, full_address, address, postcode }
 function normalise(raw: unknown): Array<{ uprn: string; full_address: string; address: string; postcode: string }> {
   if (!raw || typeof raw !== 'object') return []
-
   const obj = raw as Record<string, unknown>
 
-  // Try all known response shapes from Homedata API
   let items: unknown[] = []
 
   if (Array.isArray(obj)) {
@@ -142,25 +143,22 @@ function normalise(raw: unknown): Array<{ uprn: string; full_address: string; ad
     items = obj.addresses as unknown[]
   } else if (Array.isArray(obj.data)) {
     items = obj.data as unknown[]
-  } else if (obj.address) {
-    // Single result
-    items = [obj]
   }
 
   return items
     .filter(item => item && typeof item === 'object')
     .map(item => {
       const i = item as Record<string, unknown>
-      // UPRN can be number or string — normalise to string
       const uprn = String(i.uprn ?? i.UPRN ?? i.id ?? '')
-      const full_address = String(
-        i.full_address ?? i.fullAddress ?? i.address ?? i.display_address ?? i.line1 ?? ''
-      )
-      const address = String(i.address ?? i.line1 ?? full_address)
-      const postcode = String(i.postcode ?? i.post_code ?? i.postal_code ?? '')
-      return { uprn, full_address, address, postcode }
+      // Homedata uses "address" field — combine with town for full address
+      const address = String(i.address ?? i.full_address ?? i.display_address ?? i.line1 ?? '')
+      const town = String(i.town ?? i.town_name ?? '')
+      const postcode = String(i.postcode ?? i.post_code ?? '')
+      // Build full address: "14 DOWNING STREET, LONDON, SW1A 2AA"
+      const full_address = address || `${town} ${postcode}`.trim()
+      return { uprn, full_address, address: full_address, postcode }
     })
-    .filter(s => s.uprn && s.full_address) // must have both to be usable
+    .filter(s => s.uprn && s.full_address)
 }
 
 
