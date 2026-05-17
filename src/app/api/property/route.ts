@@ -15,84 +15,150 @@ export async function GET(req: NextRequest) {
 
   // Phase 1: address search — returns suggestions list
   if (q && !uprn) {
-    const suggestions = await searchAddress(q)
-    return NextResponse.json({ suggestions })
+    try {
+      const raw = await searchAddressRaw(q)
+      // Normalise whatever Homedata returns into a consistent shape
+      const suggestions = normalise(raw)
+      return NextResponse.json({ suggestions })
+    } catch (e) {
+      console.error('Search error:', e)
+      return NextResponse.json({ suggestions: [] })
+    }
   }
 
   // Phase 2: full property fetch by UPRN
   if (uprn) {
-    const [property, epc, transactions, risks] = await Promise.all([
-      getProperty(uprn),
-      getEpc(uprn),
-      getTransactions(uprn),
-      getRisks(uprn),
-    ])
+    try {
+      const [property, epc, transactions, risks] = await Promise.all([
+        getProperty(uprn),
+        getEpc(uprn).catch(() => null),
+        getTransactions(uprn).catch(() => []),
+        getRisks(uprn).catch(() => []),
+      ])
 
-    if (!property) {
-      return NextResponse.json({ error: 'Property not found' }, { status: 404 })
+      if (!property) {
+        return NextResponse.json({ error: 'Property not found' }, { status: 404 })
+      }
+
+      const cityName = detectCity(property.town_name || '', property.postcode || '')
+      const cityData = MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities]
+        || MARKET_DATA.cities.London
+
+      const defaults = {
+        serviceCharge: property.property_type?.toLowerCase().includes('flat') ? 2000 : 0,
+        groundRent: property.tenure?.toLowerCase().includes('leasehold') ? 200 : 0,
+        managementFee: 10,
+        maintenanceAllowance: 1.5,
+        voidWeeks: 2,
+      }
+
+      const estimatedRent = estimateRent(
+        property.property_type || '',
+        property.bedrooms || 1,
+        cityData.avgRent,
+      )
+
+      const price = property.last_sold_price || 0
+      const grossYield = price ? calcGrossYield(price, estimatedRent) : 0
+      const netYield = price ? calcNetYield(
+        price, estimatedRent,
+        defaults.serviceCharge, defaults.groundRent,
+        defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
+      ) : 0
+
+      const floodRisk = risks.find((r: {risk_type: string}) => r.risk_type === 'flood_rivers_sea')
+
+      return NextResponse.json({
+        uprn,
+        property,
+        epc,
+        transactions: (transactions || []).slice(0, 20),
+        risks,
+        cityData,
+        cityName,
+        enriched: {
+          estimatedRent,
+          grossYield,
+          netYield,
+          netMonthly: price ? calcNetMonthlyIncome(
+            price, estimatedRent,
+            defaults.serviceCharge, defaults.groundRent,
+            defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
+          ) : 0,
+          capitalGrowth: cityData.capitalGrowth1yr,
+          totalROI: parseFloat((netYield + cityData.capitalGrowth1yr).toFixed(1)),
+          floodRisk: floodRisk ? (floodRisk as {label: string}).label : 'Unknown',
+          epcRating: epc?.current_energy_efficiency
+            ? efficiencyToRating(epc.current_energy_efficiency)
+            : property.current_energy_rating || 'Unknown',
+          defaults,
+        },
+      })
+    } catch (e) {
+      console.error('Property fetch error:', e)
+      return NextResponse.json({ error: 'Failed to fetch property data' }, { status: 500 })
     }
-
-    // Derive city from town/postcode
-    const cityName = detectCity(property.town_name || '', property.postcode || '')
-    const cityData = MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities]
-      || MARKET_DATA.cities.Manchester // fallback
-
-    // Default investment assumptions
-    const defaults = {
-      serviceCharge: property.property_type?.toLowerCase().includes('flat') ? 2000 : 0,
-      groundRent: property.tenure?.toLowerCase().includes('leasehold') ? 200 : 0,
-      managementFee: 10,
-      maintenanceAllowance: 1.5,
-      voidWeeks: 2,
-    }
-
-    // Estimate monthly rent from local data (rough heuristic — user can override)
-    const estimatedRent = estimateRent(
-      property.property_type || '',
-      property.bedrooms || 1,
-      cityData.avgRent,
-    )
-
-    const price = property.last_sold_price || 0
-    const grossYield = price ? calcGrossYield(price, estimatedRent) : 0
-    const netYield = price ? calcNetYield(
-      price, estimatedRent,
-      defaults.serviceCharge, defaults.groundRent,
-      defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
-    ) : 0
-
-    const floodRisk = risks.find(r => r.risk_type === 'flood_rivers_sea')
-
-    return NextResponse.json({
-      uprn,
-      property,
-      epc,
-      transactions: transactions.slice(0, 20), // last 20 sales
-      risks,
-      cityData,
-      cityName,
-      enriched: {
-        estimatedRent,
-        grossYield,
-        netYield,
-        netMonthly: price ? calcNetMonthlyIncome(
-          price, estimatedRent,
-          defaults.serviceCharge, defaults.groundRent,
-          defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
-        ) : 0,
-        capitalGrowth: cityData.capitalGrowth1yr,
-        totalROI: parseFloat((netYield + cityData.capitalGrowth1yr).toFixed(1)),
-        floodRisk: floodRisk?.label || 'Unknown',
-        epcRating: epc?.current_energy_efficiency
-          ? efficiencyToRating(epc.current_energy_efficiency)
-          : property.current_energy_rating || 'Unknown',
-        defaults,
-      },
-    })
   }
 
   return NextResponse.json({ error: 'Provide q (search) or uprn' }, { status: 400 })
 }
+
+// ── Raw address search with full response logging ─────────────────────────────
+async function searchAddressRaw(query: string): Promise<unknown> {
+  const url = `https://api.homedata.co.uk/api/address/find/?q=${encodeURIComponent(query)}`
+  const res = await fetch(url, {
+    headers: { Authorization: `Api-Key ${process.env.HOMEDATA_API_KEY}` },
+    next: { revalidate: 60 },
+  })
+  if (!res.ok) {
+    console.error('Homedata search failed:', res.status, await res.text())
+    return []
+  }
+  const data = await res.json()
+  console.log('Homedata raw response keys:', Object.keys(data))
+  return data
+}
+
+// ── Normalise any Homedata response shape into our standard suggestion format ─
+function normalise(raw: unknown): Array<{ uprn: string; full_address: string; address: string; postcode: string }> {
+  if (!raw || typeof raw !== 'object') return []
+
+  const obj = raw as Record<string, unknown>
+
+  // Try all known response shapes from Homedata API
+  let items: unknown[] = []
+
+  if (Array.isArray(obj)) {
+    items = obj
+  } else if (Array.isArray(obj.suggestions)) {
+    items = obj.suggestions as unknown[]
+  } else if (Array.isArray(obj.results)) {
+    items = obj.results as unknown[]
+  } else if (Array.isArray(obj.addresses)) {
+    items = obj.addresses as unknown[]
+  } else if (Array.isArray(obj.data)) {
+    items = obj.data as unknown[]
+  } else if (obj.address) {
+    // Single result
+    items = [obj]
+  }
+
+  return items
+    .filter(item => item && typeof item === 'object')
+    .map(item => {
+      const i = item as Record<string, unknown>
+      // UPRN can be number or string — normalise to string
+      const uprn = String(i.uprn ?? i.UPRN ?? i.id ?? '')
+      const full_address = String(
+        i.full_address ?? i.fullAddress ?? i.address ?? i.display_address ?? i.line1 ?? ''
+      )
+      const address = String(i.address ?? i.line1 ?? full_address)
+      const postcode = String(i.postcode ?? i.post_code ?? i.postal_code ?? '')
+      return { uprn, full_address, address, postcode }
+    })
+    .filter(s => s.uprn && s.full_address) // must have both to be usable
+}
+
 
 function detectCity(town: string, postcode: string): string {
   const t = (town || '').toLowerCase()
