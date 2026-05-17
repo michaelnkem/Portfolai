@@ -95,11 +95,22 @@ export async function searchAddress(query: string): Promise<AddressSuggestion[]>
 export async function getProperty(uprn: string): Promise<PropertyRecord | null> {
   const res = await fetch(
     `${HOMEDATA_BASE}/api/properties/${uprn}`,
-    { headers: headers(), next: { revalidate: 3600 } },
+    { headers: headers(), cache: 'no-store' },
   )
-  if (!res.ok) return null
+  if (!res.ok) {
+    console.error(`getProperty ${uprn} failed:`, res.status)
+    return null
+  }
   const data = await res.json()
-  return data.data || data
+  console.log('getProperty response keys:', Object.keys(data).slice(0, 10))
+  // Handle all known response shapes
+  if (data.uprn) return data            // direct property object
+  if (data.data?.uprn) return data.data // wrapped in .data
+  if (data.property?.uprn) return data.property // wrapped in .property
+  if (data.results?.[0]?.uprn) return data.results[0] // wrapped in .results[]
+  // Return whatever we got — let the caller handle it
+  console.log('getProperty: unexpected shape, returning raw data')
+  return data
 }
 
 // EPC data by UPRN (1 call)
