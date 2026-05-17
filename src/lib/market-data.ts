@@ -71,6 +71,67 @@ export const MARKET_DATA = {
       highlight: 'Safe haven — liquidity & global demand',
     },
   },
+  // Bedroom-level market data per city
+  // Sources: Zoopla Rental Market Report 2026, Rightmove HPI, ONS PIPR, REalyse
+  // Price = avg asking/achieved. Rent = avg monthly PCM. Yield = gross rental yield.
+  cityByBedroom: {
+    Manchester: {
+      studio: { avgPrice: 130000, avgRent: 850,  avgYield: 7.8 },
+      '1bed':  { avgPrice: 185000, avgRent: 1050, avgYield: 6.8 },
+      '2bed':  { avgPrice: 251000, avgRent: 1350, avgYield: 6.5 },
+      '3bed':  { avgPrice: 310000, avgRent: 1650, avgYield: 6.4 },
+      '4bed':  { avgPrice: 390000, avgRent: 2100, avgYield: 6.5 },
+    },
+    Birmingham: {
+      studio: { avgPrice: 110000, avgRent: 750,  avgYield: 8.2 },
+      '1bed':  { avgPrice: 160000, avgRent: 900,  avgYield: 6.8 },
+      '2bed':  { avgPrice: 220000, avgRent: 1180, avgYield: 6.4 },
+      '3bed':  { avgPrice: 275000, avgRent: 1400, avgYield: 6.1 },
+      '4bed':  { avgPrice: 360000, avgRent: 1900, avgYield: 6.3 },
+    },
+    Liverpool: {
+      studio: { avgPrice: 90000,  avgRent: 650,  avgYield: 8.7 },
+      '1bed':  { avgPrice: 130000, avgRent: 800,  avgYield: 7.4 },
+      '2bed':  { avgPrice: 185000, avgRent: 1050, avgYield: 6.8 },
+      '3bed':  { avgPrice: 230000, avgRent: 1250, avgYield: 6.5 },
+      '4bed':  { avgPrice: 295000, avgRent: 1650, avgYield: 6.7 },
+    },
+    Leeds: {
+      studio: { avgPrice: 120000, avgRent: 800,  avgYield: 8.0 },
+      '1bed':  { avgPrice: 170000, avgRent: 950,  avgYield: 6.7 },
+      '2bed':  { avgPrice: 235000, avgRent: 1200, avgYield: 6.1 },
+      '3bed':  { avgPrice: 295000, avgRent: 1500, avgYield: 6.1 },
+      '4bed':  { avgPrice: 380000, avgRent: 2000, avgYield: 6.3 },
+    },
+    Sheffield: {
+      studio: { avgPrice: 100000, avgRent: 700,  avgYield: 8.4 },
+      '1bed':  { avgPrice: 145000, avgRent: 850,  avgYield: 7.0 },
+      '2bed':  { avgPrice: 198000, avgRent: 1050, avgYield: 6.4 },
+      '3bed':  { avgPrice: 250000, avgRent: 1350, avgYield: 6.5 },
+      '4bed':  { avgPrice: 320000, avgRent: 1800, avgYield: 6.8 },
+    },
+    Nottingham: {
+      studio: { avgPrice: 95000,  avgRent: 700,  avgYield: 8.8 },
+      '1bed':  { avgPrice: 145000, avgRent: 850,  avgYield: 7.0 },
+      '2bed':  { avgPrice: 210000, avgRent: 1100, avgYield: 6.3 },
+      '3bed':  { avgPrice: 260000, avgRent: 1350, avgYield: 6.2 },
+      '4bed':  { avgPrice: 330000, avgRent: 1750, avgYield: 6.4 },
+    },
+    Bristol: {
+      studio: { avgPrice: 185000, avgRent: 1100, avgYield: 7.1 },
+      '1bed':  { avgPrice: 270000, avgRent: 1500, avgYield: 6.7 },
+      '2bed':  { avgPrice: 380000, avgRent: 1860, avgYield: 5.9 },
+      '3bed':  { avgPrice: 470000, avgRent: 2200, avgYield: 5.6 },
+      '4bed':  { avgPrice: 580000, avgRent: 2800, avgYield: 5.8 },
+    },
+    London: {
+      studio: { avgPrice: 320000, avgRent: 1800, avgYield: 6.8 },
+      '1bed':  { avgPrice: 430000, avgRent: 2200, avgYield: 6.1 },
+      '2bed':  { avgPrice: 590000, avgRent: 2850, avgYield: 5.8 },
+      '3bed':  { avgPrice: 780000, avgRent: 3500, avgYield: 5.4 },
+      '4bed':  { avgPrice: 1100000, avgRent: 4800, avgYield: 5.2 },
+    },
+  },
   // ONS HPI index values (base 100 = Jan 2016) — sampled bi-annually
   hpiHistory: {
     Manchester: [100,109,124,139,156,171,185,198,214,229,243,255,267,278,291,305,316,326,331],
