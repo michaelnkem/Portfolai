@@ -16,16 +16,20 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
   const [loading, setLoading] = useState(false)
   const [loadingUprn, setLoadingUprn] = useState('')
   const [savedProperties, setSavedProperties] = useState<Record<string, unknown>[]>([])
+  const [noResults, setNoResults] = useState(false)
   const debounceRef = useRef<NodeJS.Timeout>()
 
   const searchAddresses = useCallback(async (q: string) => {
-    if (q.length < 4) { setSuggestions([]); return }
+    if (q.length < 4) { setSuggestions([]); setNoResults(false); return }
     setLoading(true)
+    setNoResults(false)
     try {
       const res = await fetch(`/api/property?q=${encodeURIComponent(q)}`)
       const data = await res.json()
-      setSuggestions(data.suggestions || [])
+      const results = data.suggestions || []
+      setSuggestions(results)
       setShowSuggestions(true)
+      if (results.length === 0) setNoResults(true)
     } catch { setSuggestions([]) }
     setLoading(false)
   }, [])
@@ -36,11 +40,23 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
     return () => clearTimeout(debounceRef.current)
   }, [query, searchAddresses])
 
+  // Press Enter — pick first result or search with what's typed
+  const handleEnter = async () => {
+    if (suggestions.length > 0) {
+      // Select first suggestion automatically
+      await fetchProperty(suggestions[0])
+    } else if (query.length >= 4) {
+      // Force a fresh search
+      await searchAddresses(query)
+    }
+  }
+
   const fetchProperty = async (suggestion: Record<string, unknown>) => {
     const uprn = suggestion.uprn as string
     if (!uprn) return
     setLoadingUprn(uprn)
     setShowSuggestions(false)
+    setNoResults(false)
     setQuery(suggestion.full_address as string || suggestion.address as string)
     try {
       const res = await fetch(`/api/property?uprn=${uprn}`)
@@ -72,23 +88,34 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
 
       {/* Search input */}
       <div className="relative mb-8 max-w-2xl">
-        <div className="relative">
-          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-mid text-lg">🔍</span>
-          <input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
-            placeholder="Type an address, postcode or street name..."
-            className="w-full pl-11 pr-4 py-4 bg-panel border border-border rounded-2xl text-white text-sm placeholder-dim focus:border-accent outline-none transition-colors"
-          />
-          {loading && (
-            <div className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin-slow" />
-          )}
+        <div className="relative flex gap-3">
+          <div className="relative flex-1">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-mid text-lg">🔍</span>
+            <input
+              value={query}
+              onChange={e => { setQuery(e.target.value); setNoResults(false) }}
+              onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+              onKeyDown={e => e.key === 'Enter' && handleEnter()}
+              placeholder="Type an address, postcode or street name..."
+              className="w-full pl-11 pr-4 py-4 bg-panel border border-border rounded-2xl text-white text-sm placeholder-dim focus:border-accent outline-none transition-colors"
+            />
+            {loading && (
+              <div className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin-slow" />
+            )}
+          </div>
+          {/* Search button */}
+          <button
+            onClick={handleEnter}
+            disabled={query.length < 4 || !!loadingUprn}
+            className="btn-primary px-6 text-sm disabled:opacity-40 shrink-0"
+          >
+            Search
+          </button>
         </div>
 
         {/* Suggestions dropdown */}
         {showSuggestions && suggestions.length > 0 && (
-          <div className="absolute top-full left-0 right-0 mt-2 bg-panel border border-border rounded-2xl overflow-hidden z-40 shadow-2xl shadow-black/50">
+          <div className="absolute top-full left-0 right-[88px] mt-2 bg-panel border border-border rounded-2xl overflow-hidden z-40 shadow-2xl shadow-black/50">
             {suggestions.slice(0, 8).map((s, i) => {
               const uprn = s.uprn as string
               const addr = (s.full_address || s.address) as string
@@ -111,6 +138,20 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
                 </button>
               )
             })}
+          </div>
+        )}
+
+        {/* No results message */}
+        {noResults && !loading && query.length >= 4 && (
+          <div className="absolute top-full left-0 right-[88px] mt-2 bg-panel border border-border rounded-2xl overflow-hidden z-40 shadow-2xl shadow-black/50 px-4 py-4">
+            <p className="text-sm text-white mb-1">No exact matches found for <strong className="text-accent">"{query}"</strong></p>
+            <p className="text-xs text-mid mb-3">Try a more specific address, postcode or street name.</p>
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-mono text-dim tracking-wide">TIPS</p>
+              <p className="text-xs text-mid">· Try just the postcode — e.g. <span className="text-accent">SW1A 1AA</span></p>
+              <p className="text-xs text-mid">· Try house number and street — e.g. <span className="text-accent">14 Downing Street</span></p>
+              <p className="text-xs text-mid">· Try street and town — e.g. <span className="text-accent">Oxford Street London</span></p>
+            </div>
           </div>
         )}
       </div>
@@ -242,11 +283,11 @@ function PropertyCard({ data, onSelect, onAI, onSave }: {
           {/* Simple bar representation */}
           <div className="flex items-end gap-0.5 h-8">
             {transactions.slice(-8).reverse().map((t, i) => {
-              const maxP = Math.max(...transactions.slice(-8).map(x => x.price as number))
-              const pct = ((t.price as number) / maxP) * 100
+              const maxP = Math.max(...transactions.slice(-8).map(x => Number(x.price ?? 0)))
+              const pct = (Number(t.price ?? 0) / maxP) * 100
               return (
                 <div key={i} className="flex-1 bg-accent/40 rounded-sm transition-all hover:bg-accent"
-                     style={{ height: `${pct}%` }} title={`£${(t.price as number).toLocaleString()} (${t.date})`} />
+                     style={{ height: `${pct}%` }} title={`£${Number(t.price ?? 0).toLocaleString()} (${String(t.date ?? '')})`} />
               )
             })}
           </div>
