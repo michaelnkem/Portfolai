@@ -88,25 +88,41 @@ export function PropertySearch({ onSelectProperty, onAI, onAddPortfolio }: Prope
 
   const fetchProperty = async (suggestion: Record<string, unknown>) => {
     const uprn = String(suggestion.uprn ?? '')
-    if (!uprn) return
+    if (!uprn) { console.error('No UPRN on suggestion:', suggestion); return }
     setLoadingUprn(uprn)
     setShowDropdown(false)
     try {
       const res = await fetch(`/api/property?uprn=${uprn}`)
       const data = await res.json()
-      if (!data.error) {
+      console.log('Property fetch response:', { uprn, hasProperty: !!data.property, error: data.error })
+
+      // Open detail panel if we got a property record back — even if some fields are missing
+      if (data.property) {
         const full = { ...data, suggestion }
         onSelectProperty(full)
         setRecentProperties(prev => {
           const exists = prev.find(p => (p.property as Record<string, unknown>)?.uprn === uprn)
           return exists ? prev : [full, ...prev.slice(0, 5)]
         })
+        // Reset search after successful selection
         setQuery('')
         setSuggestions([])
         setSearchState('idle')
         setCommittedQuery('')
+      } else {
+        console.error('No property in response:', data)
+        // Still try to open with whatever we got
+        if (!data.error) {
+          onSelectProperty({ ...data, suggestion })
+          setQuery('')
+          setSuggestions([])
+          setSearchState('idle')
+          setCommittedQuery('')
+        }
       }
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      console.error('fetchProperty error:', e)
+    }
     setLoadingUprn('')
   }
 
