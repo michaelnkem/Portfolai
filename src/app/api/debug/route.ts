@@ -1,32 +1,65 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-// Debug endpoint — helps diagnose Homedata API response format
-// Visit: /api/debug?q=your+search+query
 export async function GET(req: NextRequest) {
-  const q = req.nextUrl.searchParams.get('q') || 'Oxford Street London'
-  const uprn = req.nextUrl.searchParams.get('uprn')
+  const outcode = req.nextUrl.searchParams.get('outcode') || 'EN3'
+  const lrType  = req.nextUrl.searchParams.get('type') || 'S' // S=semi, T=terraced, F=flat, D=detached
 
-  if (!process.env.HOMEDATA_API_KEY) {
-    return NextResponse.json({ error: 'No API key' })
+  const lrTypeUri = lrType === 'F' ? 'http://landregistry.data.gov.uk/def/ppi/flat-maisonette'
+    : lrType === 'S' ? 'http://landregistry.data.gov.uk/def/ppi/semi-detached'
+    : lrType === 'T' ? 'http://landregistry.data.gov.uk/def/ppi/terraced'
+    : 'http://landregistry.data.gov.uk/def/ppi/detached'
+
+  const cutoffDate = new Date()
+  cutoffDate.setMonth(cutoffDate.getMonth() - 18)
+  const cutoffStr = cutoffDate.toISOString().slice(0, 10)
+
+  const sparql = `
+PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
+
+SELECT ?postcode ?amount ?date ?propertyType WHERE {
+  ?transx lrppi:pricePaid ?amount ;
+          lrppi:transactionDate ?date ;
+          lrppi:propertyType ?propertyType ;
+          lrppi:newBuild ?newBuild ;
+          lrppi:propertyAddress ?addr .
+  ?addr lrcommon:postcode ?postcode .
+  FILTER(STRSTARTS(STR(?postcode), "${outcode}"))
+  FILTER(?date >= "${cutoffStr}"^^xsd:date)
+  FILTER(?newBuild = "false"^^xsd:boolean)
+  FILTER(?propertyType = <${lrTypeUri}>)
+}
+ORDER BY DESC(?date)
+LIMIT 20
+`.trim()
+
+  const url = `https://landregistry.data.gov.uk/landregistry/query?query=${encodeURIComponent(sparql)}&output=json`
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'Accept': 'application/sparql-results+json' },
+      cache: 'no-store',
+    })
+
+    const text = await res.text()
+    let data
+    try { data = JSON.parse(text) } catch { data = { raw: text.slice(0, 500) } }
+
+    const bindings = data?.results?.bindings || []
+
+    return NextResponse.json({
+      outcode,
+      lrType,
+      lrTypeUri,
+      cutoffDate: cutoffStr,
+      httpStatus: res.status,
+      resultCount: bindings.length,
+      sample: bindings.slice(0, 5),
+      sparqlUrl: url.slice(0, 200) + '...',
+    })
+  } catch (e: unknown) {
+    return NextResponse.json({ error: String(e), outcode, lrType })
   }
-
-  const headers = { Authorization: `Api-Key ${process.env.HOMEDATA_API_KEY}` }
-
-  if (uprn) {
-    const res = await fetch(`https://api.homedata.co.uk/api/properties/${uprn}`, { headers })
-    const data = await res.json()
-    return NextResponse.json({ status: res.status, uprn, data })
-  }
-
-  const res = await fetch(
-    `https://api.homedata.co.uk/api/address/find/?q=${encodeURIComponent(q)}`,
-    { headers }
-  )
-  const data = await res.json()
-  return NextResponse.json({
-    status: res.status,
-    query: q,
-    responseKeys: Object.keys(data),
-    fullResponse: data,
-  })
 }
