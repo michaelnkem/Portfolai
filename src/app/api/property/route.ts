@@ -66,47 +66,15 @@ export async function GET(req: NextRequest) {
 
       const price = Number(propRecord.last_sold_price || 0)
 
-      // ── Estimated current value using district price trends ──────────────────
-      // Fetch price trends for the property's outcode (e.g. EN3, SW1A, M1)
-      // Use the avg growth across all available months to derive an annual rate
-      // Fall back to city 5yr average if no trend data available
-      let estimatedCurrentValue = 0
-      if (price && propRecord.last_sold_date) {
-        try {
-          const trendRes = await fetch(
-            `https://api.homedata.co.uk/api/price_trends/${outcode}/`,
-            { headers: { Authorization: `Api-Key ${process.env.HOMEDATA_API_KEY}` }, cache: 'no-store' }
-          )
-          if (trendRes.ok) {
-            const trendData = await trendRes.json()
-            const monthlyPrices: Record<string, number> = trendData.monthly_average_prices || {}
-            const months = Object.keys(monthlyPrices).sort()
-
-            if (months.length >= 12) {
-              // Calculate annualised growth from earliest to latest month in dataset
-              const earliest = monthlyPrices[months[0]]
-              const latest = monthlyPrices[months[months.length - 1]]
-              const yearSpan = months.length / 12
-              const totalGrowth = latest / earliest - 1
-              const annualRate = Math.pow(1 + totalGrowth, 1 / yearSpan) - 1
-
-              const soldYear = Number(String(propRecord.last_sold_date).slice(0, 4))
-              const yearsHeld = Math.max(0, 2026 - soldYear)
-              estimatedCurrentValue = Math.round(price * Math.pow(1 + annualRate, yearsHeld))
-            }
-          }
-        } catch (e) {
-          console.log('Price trend fetch failed, using fallback:', e)
-        }
-
-        // Fallback: city 5yr average if trend data unavailable
-        if (!estimatedCurrentValue) {
-          const soldYear = Number(String(propRecord.last_sold_date).slice(0, 4))
-          const yearsHeld = Math.max(0, 2026 - soldYear)
-          const annualRate = (cityData.capitalGrowth5yr / 5) / 100
-          estimatedCurrentValue = Math.round(price * Math.pow(1 + annualRate, yearsHeld))
-        }
-      }
+      // ── COMPARABLE-BASED VALUATION ENGINE ────────────────────────────────────
+      // Methodology: weighted £/sqm from comparable sold prices
+      // Based on RICS/AVM methodology from valuation instructions
+      const valuation = await calcComparableValuation(
+        uprn,
+        propRecord,
+        cityData,
+        process.env.HOMEDATA_API_KEY!
+      )
 
       const grossYield = price ? calcGrossYield(price, estimatedRent) : 0
       const netYield = price ? calcNetYield(
@@ -127,7 +95,11 @@ export async function GET(req: NextRequest) {
         cityName,
         enriched: {
           estimatedRent,
-          estimatedCurrentValue,
+          estimatedCurrentValue: valuation.fairValue,
+          valuationLow: valuation.lowValue,
+          valuationHigh: valuation.highValue,
+          valuationConfidence: valuation.confidence,
+          valuationCompsUsed: valuation.compsUsed,
           grossYield,
           netYield,
           netMonthly: price ? calcNetMonthlyIncome(
@@ -276,4 +248,228 @@ function efficiencyToRating(score: number): string {
   if (score >= 39) return 'E'
   if (score >= 21) return 'F'
   return 'G'
+}
+
+// ── COMPARABLE VALUATION ENGINE ───────────────────────────────────────────────
+// Methodology: weighted £/sqm from comparable sold prices
+// Based on RICS/AVM valuation methodology
+interface ValuationResult {
+  fairValue: number
+  lowValue: number
+  highValue: number
+  confidence: number
+  compsUsed: number
+  method: string
+}
+
+async function calcComparableValuation(
+  uprn: string,
+  prop: Record<string, unknown>,
+  cityData: Record<string, number>,
+  apiKey: string
+): Promise<ValuationResult> {
+
+  const subjectArea   = Number(prop.internal_area_sqm || prop.epc_floor_area || 0)
+  const subjectType   = String(prop.property_type || '').toLowerCase()
+  const subjectBeds   = Number(prop.bedrooms || 2)
+  const subjectTenure = String(prop.tenure || '').toLowerCase()
+  const subjectEpc    = String(prop.current_energy_rating || 'D')
+  const hasParking    = Boolean(prop.has_parking)
+  const hasGarden     = Boolean(prop.has_garden)
+
+  // ── FALLBACK: growth-rate method (used when comparables unavailable) ─────────
+  const fallback = (): ValuationResult => {
+    const price = Number(prop.last_sold_price || 0)
+    if (!price) return { fairValue: 0, lowValue: 0, highValue: 0, confidence: 0, compsUsed: 0, method: 'none' }
+    const soldYear = Number(String(prop.last_sold_date || '2015').slice(0, 4))
+    const yearsHeld = Math.max(0, 2026 - soldYear)
+    const annualRate = Math.max(0.01, Math.min(0.08, (cityData.capitalGrowth5yr / 5) / 100))
+    const fair = Math.round(price * Math.pow(1 + annualRate, yearsHeld))
+    return {
+      fairValue: fair,
+      lowValue: Math.round(fair * 0.95),
+      highValue: Math.round(fair * 1.05),
+      confidence: 45,
+      compsUsed: 0,
+      method: 'growth_rate_fallback',
+    }
+  }
+
+  try {
+    // ── FETCH COMPARABLES ──────────────────────────────────────────────────────
+    // Filter to same property type, 18 month window, 1 mile radius
+    const typeParam = subjectType.includes('flat') ? 'Flat'
+      : subjectType.includes('detached') && !subjectType.includes('semi') ? 'Detached'
+      : subjectType.includes('semi') ? 'Semi-Detached'
+      : subjectType.includes('terrace') ? 'Terraced'
+      : subjectType.includes('bungalow') ? 'Detached'
+      : ''
+
+    const startDate = new Date()
+    startDate.setMonth(startDate.getMonth() - 18)
+    const startDateStr = startDate.toISOString().slice(0, 10)
+
+    const params = new URLSearchParams({
+      reference_uprn: uprn,
+      radius: '1600', // ~1 mile in metres
+      count: '20',
+      start_date: startDateStr,
+      event_type: 'sale',
+    })
+    if (typeParam) params.set('property_type', typeParam)
+
+    const compRes = await fetch(
+      `https://api.homedata.co.uk/api/comparables/?${params}`,
+      { headers: { Authorization: `Api-Key ${apiKey}` }, cache: 'no-store' }
+    )
+
+    if (!compRes.ok) {
+      console.log('Comparables fetch failed:', compRes.status)
+      return fallback()
+    }
+
+    const compData = await compRes.json()
+    const rawComps: Record<string, unknown>[] = compData.comparables || compData.results || []
+
+    if (rawComps.length < 2) {
+      console.log(`Only ${rawComps.length} comparables — using fallback`)
+      return fallback()
+    }
+
+    // ── SCORE & FILTER COMPARABLES ────────────────────────────────────────────
+    const now = Date.now()
+
+    interface ScoredComp {
+      pricePerSqm: number
+      soldPrice: number
+      floorArea: number
+      score: number
+      distanceM: number
+      beds: number
+    }
+
+    const scored: ScoredComp[] = []
+
+    for (const c of rawComps) {
+      const soldPrice = Number(c.sold_let_price || c.last_sold_price || 0)
+      const floorArea = Number(c.epc_floor_area || c.internal_area_sqm || 0)
+      const soldDate  = String(c.sold_let_date || c.last_sold_date || '')
+      const distanceM = Number(c.distance_meters || c.distance_m || 999)
+      const compBeds  = Number(c.bedrooms || 0)
+      const compType  = String(c.property_type || '').toLowerCase()
+
+      // Must have price and floor area for £/sqm calculation
+      if (!soldPrice || !floorArea || soldPrice < 10000) continue
+
+      // Exclude unlike property types
+      const typeMatch =
+        (subjectType.includes('flat') && compType.includes('flat')) ||
+        (subjectType.includes('terrace') && compType.includes('terrace')) ||
+        (subjectType.includes('semi') && compType.includes('semi')) ||
+        (subjectType.includes('detached') && !subjectType.includes('semi') && compType.includes('detached') && !compType.includes('semi')) ||
+        (subjectType.includes('bungalow') && compType.includes('bungalow'))
+
+      if (!typeMatch && typeParam) continue
+
+      const pricePerSqm = soldPrice / floorArea
+
+      // Sanity check £/sqm — reject obvious outliers (< £500 or > £25,000)
+      if (pricePerSqm < 500 || pricePerSqm > 25000) continue
+
+      // ── SIMILARITY SCORING (matches the methodology from instructions) ───────
+      // Size similarity (35%) — closer floor area = higher score
+      const areaRatio = subjectArea > 0 ? Math.min(subjectArea, floorArea) / Math.max(subjectArea, floorArea) : 0.5
+      const sizeSimilarity = areaRatio // 0–1
+
+      // Distance (25%) — same street highest, 1 mile lowest
+      const distanceScore = Math.max(0, 1 - distanceM / 1600)
+
+      // Recency (25%) — more recent = higher score
+      const soldMs = soldDate ? new Date(soldDate).getTime() : now - 86400000 * 365
+      const ageMs = now - soldMs
+      const maxAgeMs = 18 * 30 * 86400000
+      const recencyScore = Math.max(0, 1 - ageMs / maxAgeMs)
+
+      // Property match (15%) — beds, type
+      const bedDiff = Math.abs(subjectBeds - compBeds)
+      const propertyMatch = bedDiff === 0 ? 1 : bedDiff === 1 ? 0.7 : 0.4
+
+      const score =
+        (sizeSimilarity * 0.35) +
+        (distanceScore  * 0.25) +
+        (recencyScore   * 0.25) +
+        (propertyMatch  * 0.15)
+
+      scored.push({ pricePerSqm, soldPrice, floorArea, score, distanceM, beds: compBeds })
+    }
+
+    if (scored.length < 2) {
+      console.log('Too few valid comps after filtering — using fallback')
+      return fallback()
+    }
+
+    // ── WEIGHTED £/SQM ────────────────────────────────────────────────────────
+    const totalScore   = scored.reduce((s, c) => s + c.score, 0)
+    const weightedPsm  = scored.reduce((s, c) => s + c.pricePerSqm * c.score, 0) / totalScore
+
+    // ── BASE VALUE ────────────────────────────────────────────────────────────
+    // Use subject floor area if available, otherwise estimate from beds
+    const effectiveArea = subjectArea > 0 ? subjectArea : estimateFloorArea(subjectBeds, subjectType)
+    let baseValue = Math.round(weightedPsm * effectiveArea)
+
+    // ── FEATURE ADJUSTMENTS ───────────────────────────────────────────────────
+    let adjustment = 1.0
+
+    // EPC adjustment
+    if (subjectEpc === 'A' || subjectEpc === 'B') adjustment += 0.02
+    else if (subjectEpc === 'E') adjustment -= 0.02
+    else if (subjectEpc === 'F') adjustment -= 0.04
+    else if (subjectEpc === 'G') adjustment -= 0.05
+
+    // Parking
+    if (hasParking) adjustment += 0.03
+
+    // Garden
+    if (hasGarden) adjustment += 0.02
+
+    // Leasehold short lease risk (if leasehold, apply slight discount)
+    if (subjectTenure.includes('leasehold')) adjustment -= 0.01
+
+    const adjustedValue = Math.round(baseValue * adjustment)
+
+    // ── CONFIDENCE SCORE ──────────────────────────────────────────────────────
+    let confidence = 50
+    if (scored.length >= 5)  confidence += 15
+    if (scored.length >= 10) confidence += 10
+    if (subjectArea > 0)     confidence += 15 // have actual floor area
+    const avgDistance = scored.reduce((s, c) => s + c.distanceM, 0) / scored.length
+    if (avgDistance < 400)   confidence += 10 // very local comps
+    if (scored.some(c => c.beds === subjectBeds)) confidence += 5
+    confidence = Math.min(92, confidence)
+
+    // ── VALUATION RANGE ───────────────────────────────────────────────────────
+    // Tighter range for higher confidence
+    const spread = confidence >= 75 ? 0.04 : confidence >= 60 ? 0.06 : 0.08
+    const lowValue  = Math.round(adjustedValue * (1 - spread) / 1000) * 1000
+    const highValue = Math.round(adjustedValue * (1 + spread) / 1000) * 1000
+    const fairValue = Math.round(adjustedValue / 1000) * 1000
+
+    console.log(`Valuation: £${fairValue.toLocaleString()} (${scored.length} comps, ${confidence}% confidence, £${Math.round(weightedPsm)}/sqm)`)
+
+    return { fairValue, lowValue, highValue, confidence, compsUsed: scored.length, method: 'comparable_psm' }
+
+  } catch (e) {
+    console.error('Valuation engine error:', e)
+    return fallback()
+  }
+}
+
+// Estimate floor area from beds when not provided
+function estimateFloorArea(beds: number, type: string): number {
+  const t = type.toLowerCase()
+  const base: Record<number, number> = { 0: 35, 1: 50, 2: 70, 3: 90, 4: 115, 5: 140 }
+  const area = base[Math.min(beds, 5)] || 70
+  // Detached properties tend to be larger
+  if (t.includes('detached') && !t.includes('semi')) return Math.round(area * 1.2)
+  return area
 }
