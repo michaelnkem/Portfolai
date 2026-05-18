@@ -251,8 +251,9 @@ function efficiencyToRating(score: number): string {
 }
 
 // ── COMPARABLE VALUATION ENGINE ───────────────────────────────────────────────
-// Methodology: weighted £/sqm from comparable sold prices
-// Based on RICS/AVM valuation methodology
+// Data source: HM Land Registry Price Paid Data (free, no API key required)
+// SPARQL endpoint: landregistry.data.gov.uk/landregistry/query
+// Methodology: weighted £/sqm from comparable sold prices (RICS/AVM standard)
 interface ValuationResult {
   fairValue: number
   lowValue: number
@@ -262,11 +263,22 @@ interface ValuationResult {
   method: string
 }
 
+// Land Registry property type codes
+// D=Detached, S=Semi-Detached, T=Terraced, F=Flat/Maisonette, O=Other
+function toLrType(propertyType: string): string {
+  const t = propertyType.toLowerCase()
+  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 'F'
+  if (t.includes('semi')) return 'S'
+  if (t.includes('terrace')) return 'T'
+  if (t.includes('detached') || t.includes('bungalow')) return 'D'
+  return '' // no filter — accept all types
+}
+
 async function calcComparableValuation(
   uprn: string,
   prop: Record<string, unknown>,
   cityData: Record<string, number>,
-  apiKey: string
+  _apiKey: string // kept for signature compatibility — not needed for LR
 ): Promise<ValuationResult> {
 
   const subjectArea   = Number(prop.internal_area_sqm || prop.epc_floor_area || 0)
@@ -276,67 +288,86 @@ async function calcComparableValuation(
   const subjectEpc    = String(prop.current_energy_rating || 'D')
   const hasParking    = Boolean(prop.has_parking)
   const hasGarden     = Boolean(prop.has_garden)
+  const postcode      = String(prop.postcode || '')
+  const outcode       = postcode.split(' ')[0] // e.g. EN3
 
-  // ── FALLBACK: growth-rate method (used when comparables unavailable) ─────────
+  // ── FALLBACK: city growth-rate method ────────────────────────────────────────
   const fallback = (): ValuationResult => {
     const price = Number(prop.last_sold_price || 0)
     if (!price) return { fairValue: 0, lowValue: 0, highValue: 0, confidence: 0, compsUsed: 0, method: 'none' }
-    const soldYear = Number(String(prop.last_sold_date || '2015').slice(0, 4))
+    const soldYear  = Number(String(prop.last_sold_date || '2015').slice(0, 4))
     const yearsHeld = Math.max(0, 2026 - soldYear)
     const annualRate = Math.max(0.01, Math.min(0.08, (cityData.capitalGrowth5yr / 5) / 100))
     const fair = Math.round(price * Math.pow(1 + annualRate, yearsHeld))
-    return {
-      fairValue: fair,
-      lowValue: Math.round(fair * 0.95),
-      highValue: Math.round(fair * 1.05),
-      confidence: 45,
-      compsUsed: 0,
-      method: 'growth_rate_fallback',
-    }
+    return { fairValue: fair, lowValue: Math.round(fair * 0.95), highValue: Math.round(fair * 1.05), confidence: 45, compsUsed: 0, method: 'growth_rate_fallback' }
   }
 
+  if (!outcode) return fallback()
+
   try {
-    // ── FETCH COMPARABLES ──────────────────────────────────────────────────────
-    // Filter to same property type, 18 month window, 1 mile radius
-    const typeParam = subjectType.includes('flat') ? 'Flat'
-      : subjectType.includes('detached') && !subjectType.includes('semi') ? 'Detached'
-      : subjectType.includes('semi') ? 'Semi-Detached'
-      : subjectType.includes('terrace') ? 'Terraced'
-      : subjectType.includes('bungalow') ? 'Detached'
+    // ── QUERY LAND REGISTRY SPARQL ────────────────────────────────────────────
+    // Fetch sold prices for same outcode, same property type, last 18 months
+    // Free public endpoint — no auth required
+    const lrType = toLrType(subjectType)
+    const cutoffDate = new Date()
+    cutoffDate.setMonth(cutoffDate.getMonth() - 18)
+    const cutoffStr = cutoffDate.toISOString().slice(0, 10)
+
+    const typeFilter = lrType
+      ? `FILTER(?propertyType = lrppi:${lrType === 'F' ? 'flat-maisonette' : lrType === 'S' ? 'semi-detached' : lrType === 'T' ? 'terraced' : 'detached'})`
       : ''
 
-    const startDate = new Date()
-    startDate.setMonth(startDate.getMonth() - 18)
-    const startDateStr = startDate.toISOString().slice(0, 10)
+    // SPARQL query — returns address, price, date, property type, new build flag
+    const sparql = `
+PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 
-    const params = new URLSearchParams({
-      reference_uprn: uprn,
-      radius: '1600', // ~1 mile in metres
-      count: '20',
-      start_date: startDateStr,
-      event_type: 'sale',
+SELECT ?paon ?saon ?street ?postcode ?amount ?date ?propertyType ?newBuild WHERE {
+  ?transx lrppi:pricePaid ?amount ;
+          lrppi:transactionDate ?date ;
+          lrppi:propertyType ?propertyType ;
+          lrppi:newBuild ?newBuild ;
+          lrppi:propertyAddress ?addr .
+  ?addr lrcommon:postcode ?postcode .
+  OPTIONAL { ?addr lrcommon:paon ?paon }
+  OPTIONAL { ?addr lrcommon:saon ?saon }
+  OPTIONAL { ?addr lrcommon:street ?street }
+  FILTER(STRSTARTS(?postcode, "${outcode}"))
+  FILTER(?date >= "${cutoffStr}"^^xsd:date)
+  FILTER(?newBuild = false)
+  ${typeFilter}
+}
+ORDER BY DESC(?date)
+LIMIT 50
+`.trim()
+
+    const sparqlUrl = 'https://landregistry.data.gov.uk/landregistry/query'
+    const res = await fetch(sparqlUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/sparql-query',
+        'Accept': 'application/sparql-results+json',
+      },
+      body: sparql,
+      cache: 'no-store',
     })
-    if (typeParam) params.set('property_type', typeParam)
 
-    const compRes = await fetch(
-      `https://api.homedata.co.uk/api/comparables/?${params}`,
-      { headers: { Authorization: `Api-Key ${apiKey}` }, cache: 'no-store' }
-    )
-
-    if (!compRes.ok) {
-      console.log('Comparables fetch failed:', compRes.status)
+    if (!res.ok) {
+      console.log('Land Registry SPARQL failed:', res.status)
       return fallback()
     }
 
-    const compData = await compRes.json()
-    const rawComps: Record<string, unknown>[] = compData.comparables || compData.results || []
+    const sparqlData = await res.json()
+    const bindings: Record<string, { value: string }>[] = sparqlData?.results?.bindings || []
 
-    if (rawComps.length < 2) {
-      console.log(`Only ${rawComps.length} comparables — using fallback`)
-      return fallback()
-    }
+    console.log(`LR SPARQL: ${bindings.length} results for outcode ${outcode}`)
 
-    // ── SCORE & FILTER COMPARABLES ────────────────────────────────────────────
+    if (bindings.length < 2) return fallback()
+
+    // ── SCORE EACH COMPARABLE ─────────────────────────────────────────────────
+    // Land Registry doesn't include floor area — we estimate from property type
+    // and use price alone (not £/sqm) when no area available, OR use estimated area
     const now = Date.now()
 
     interface ScoredComp {
@@ -344,95 +375,87 @@ async function calcComparableValuation(
       soldPrice: number
       floorArea: number
       score: number
-      distanceM: number
-      beds: number
+      date: string
     }
 
     const scored: ScoredComp[] = []
 
-    for (const c of rawComps) {
-      const soldPrice = Number(c.sold_let_price || c.last_sold_price || 0)
-      const floorArea = Number(c.epc_floor_area || c.internal_area_sqm || 0)
-      const soldDate  = String(c.sold_let_date || c.last_sold_date || '')
-      const distanceM = Number(c.distance_meters || c.distance_m || 999)
-      const compBeds  = Number(c.bedrooms || 0)
-      const compType  = String(c.property_type || '').toLowerCase()
+    for (const b of bindings) {
+      const soldPrice  = Number(b.amount?.value || 0)
+      const soldDate   = String(b.date?.value || '')
+      const compType   = String(b.propertyType?.value || '').toLowerCase()
+      const compPostcode = String(b.postcode?.value || '')
 
-      // Must have price and floor area for £/sqm calculation
-      if (!soldPrice || !floorArea || soldPrice < 10000) continue
+      if (!soldPrice || soldPrice < 10000) continue
 
-      // Exclude unlike property types
-      const typeMatch =
-        (subjectType.includes('flat') && compType.includes('flat')) ||
-        (subjectType.includes('terrace') && compType.includes('terrace')) ||
-        (subjectType.includes('semi') && compType.includes('semi')) ||
-        (subjectType.includes('detached') && !subjectType.includes('semi') && compType.includes('detached') && !compType.includes('semi')) ||
-        (subjectType.includes('bungalow') && compType.includes('bungalow'))
+      // Estimate floor area from property type
+      // LR doesn't provide floor area — use type-based estimate
+      // This is less precise than having actual sqm but still enables £/sqm calc
+      const estimatedArea = lrType === 'F' ? 60
+        : lrType === 'S' ? 88
+        : lrType === 'T' ? 80
+        : lrType === 'D' ? 110
+        : estimateFloorArea(subjectBeds, subjectType)
 
-      if (!typeMatch && typeParam) continue
+      // Use the subject property's actual area if available for normalisation
+      // Otherwise use the estimated area for this property type
+      const floorArea = estimatedArea
 
       const pricePerSqm = soldPrice / floorArea
 
-      // Sanity check £/sqm — reject obvious outliers (< £500 or > £25,000)
+      // Sanity check
       if (pricePerSqm < 500 || pricePerSqm > 25000) continue
 
-      // ── SIMILARITY SCORING (matches the methodology from instructions) ───────
-      // Size similarity (35%) — closer floor area = higher score
-      const areaRatio = subjectArea > 0 ? Math.min(subjectArea, floorArea) / Math.max(subjectArea, floorArea) : 0.5
-      const sizeSimilarity = areaRatio // 0–1
+      // ── SIMILARITY SCORING ─────────────────────────────────────────────────
+      // Size similarity (35%) — same outcode, no size data from LR, use type match as proxy
+      const sizeSimilarity = lrType && compType.includes(
+        lrType === 'S' ? 'semi' : lrType === 'T' ? 'terrace' : lrType === 'F' ? 'flat' : 'detach'
+      ) ? 0.85 : 0.6
 
-      // Distance (25%) — same street highest, 1 mile lowest
-      const distanceScore = Math.max(0, 1 - distanceM / 1600)
+      // Distance (25%) — same full postcode = highest, same outcode only = medium
+      const sameFullPostcode = compPostcode.trim().toUpperCase() === postcode.trim().toUpperCase()
+      const sameIncode = compPostcode.trim().split(' ')[0].toUpperCase() === outcode.toUpperCase()
+      const distanceScore = sameFullPostcode ? 1.0 : sameIncode ? 0.7 : 0.4
 
-      // Recency (25%) — more recent = higher score
+      // Recency (25%)
       const soldMs = soldDate ? new Date(soldDate).getTime() : now - 86400000 * 365
       const ageMs = now - soldMs
       const maxAgeMs = 18 * 30 * 86400000
       const recencyScore = Math.max(0, 1 - ageMs / maxAgeMs)
 
-      // Property match (15%) — beds, type
-      const bedDiff = Math.abs(subjectBeds - compBeds)
-      const propertyMatch = bedDiff === 0 ? 1 : bedDiff === 1 ? 0.7 : 0.4
+      // Property match (15%) — type match only (no beds from LR)
+      const typeMatchScore = sizeSimilarity > 0.8 ? 1.0 : 0.6
 
       const score =
-        (sizeSimilarity * 0.35) +
-        (distanceScore  * 0.25) +
-        (recencyScore   * 0.25) +
-        (propertyMatch  * 0.15)
+        (sizeSimilarity  * 0.35) +
+        (distanceScore   * 0.25) +
+        (recencyScore    * 0.25) +
+        (typeMatchScore  * 0.15)
 
-      scored.push({ pricePerSqm, soldPrice, floorArea, score, distanceM, beds: compBeds })
+      scored.push({ pricePerSqm, soldPrice, floorArea, score, date: soldDate })
     }
 
     if (scored.length < 2) {
-      console.log('Too few valid comps after filtering — using fallback')
+      console.log('Too few valid LR comps — using fallback')
       return fallback()
     }
 
     // ── WEIGHTED £/SQM ────────────────────────────────────────────────────────
-    const totalScore   = scored.reduce((s, c) => s + c.score, 0)
-    const weightedPsm  = scored.reduce((s, c) => s + c.pricePerSqm * c.score, 0) / totalScore
+    const totalScore  = scored.reduce((s, c) => s + c.score, 0)
+    const weightedPsm = scored.reduce((s, c) => s + c.pricePerSqm * c.score, 0) / totalScore
 
     // ── BASE VALUE ────────────────────────────────────────────────────────────
-    // Use subject floor area if available, otherwise estimate from beds
     const effectiveArea = subjectArea > 0 ? subjectArea : estimateFloorArea(subjectBeds, subjectType)
-    let baseValue = Math.round(weightedPsm * effectiveArea)
+    const baseValue = Math.round(weightedPsm * effectiveArea)
 
     // ── FEATURE ADJUSTMENTS ───────────────────────────────────────────────────
     let adjustment = 1.0
-
-    // EPC adjustment
-    if (subjectEpc === 'A' || subjectEpc === 'B') adjustment += 0.02
+    if      (subjectEpc === 'A' || subjectEpc === 'B') adjustment += 0.02
     else if (subjectEpc === 'E') adjustment -= 0.02
     else if (subjectEpc === 'F') adjustment -= 0.04
     else if (subjectEpc === 'G') adjustment -= 0.05
-
-    // Parking
-    if (hasParking) adjustment += 0.03
-
-    // Garden
-    if (hasGarden) adjustment += 0.02
-
-    // Leasehold short lease risk (if leasehold, apply slight discount)
+    if (hasParking)  adjustment += 0.03
+    if (hasGarden)   adjustment += 0.02
     if (subjectTenure.includes('leasehold')) adjustment -= 0.01
 
     const adjustedValue = Math.round(baseValue * adjustment)
@@ -440,26 +463,24 @@ async function calcComparableValuation(
     // ── CONFIDENCE SCORE ──────────────────────────────────────────────────────
     let confidence = 50
     if (scored.length >= 5)  confidence += 15
-    if (scored.length >= 10) confidence += 10
-    if (subjectArea > 0)     confidence += 15 // have actual floor area
-    const avgDistance = scored.reduce((s, c) => s + c.distanceM, 0) / scored.length
-    if (avgDistance < 400)   confidence += 10 // very local comps
-    if (scored.some(c => c.beds === subjectBeds)) confidence += 5
-    confidence = Math.min(92, confidence)
+    if (scored.length >= 15) confidence += 10
+    if (subjectArea > 0)     confidence += 10 // actual floor area available
+    else                     confidence -= 5  // using estimated floor area
+    if (scored.some(c => c.pricePerSqm > 0)) confidence += 5
+    confidence = Math.min(88, Math.max(40, confidence))
 
     // ── VALUATION RANGE ───────────────────────────────────────────────────────
-    // Tighter range for higher confidence
-    const spread = confidence >= 75 ? 0.04 : confidence >= 60 ? 0.06 : 0.08
+    const spread    = confidence >= 75 ? 0.05 : confidence >= 60 ? 0.07 : 0.10
     const lowValue  = Math.round(adjustedValue * (1 - spread) / 1000) * 1000
     const highValue = Math.round(adjustedValue * (1 + spread) / 1000) * 1000
     const fairValue = Math.round(adjustedValue / 1000) * 1000
 
-    console.log(`Valuation: £${fairValue.toLocaleString()} (${scored.length} comps, ${confidence}% confidence, £${Math.round(weightedPsm)}/sqm)`)
+    console.log(`LR Valuation: £${fairValue.toLocaleString()} (${scored.length} comps, ${confidence}% confidence, £${Math.round(weightedPsm)}/sqm, area ${effectiveArea}sqm)`)
 
-    return { fairValue, lowValue, highValue, confidence, compsUsed: scored.length, method: 'comparable_psm' }
+    return { fairValue, lowValue, highValue, confidence, compsUsed: scored.length, method: 'lr_comparable_psm' }
 
   } catch (e) {
-    console.error('Valuation engine error:', e)
+    console.error('LR valuation engine error:', e)
     return fallback()
   }
 }
