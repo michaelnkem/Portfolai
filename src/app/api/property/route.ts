@@ -313,43 +313,42 @@ async function calcComparableValuation(
     cutoffDate.setMonth(cutoffDate.getMonth() - 18)
     const cutoffStr = cutoffDate.toISOString().slice(0, 10)
 
-    const typeFilter = lrType
-      ? `FILTER(?propertyType = lrppi:${lrType === 'F' ? 'flat-maisonette' : lrType === 'S' ? 'semi-detached' : lrType === 'T' ? 'terraced' : 'detached'})`
+    const lrTypeUri = lrType === 'F' ? 'http://landregistry.data.gov.uk/def/ppi/flat-maisonette'
+      : lrType === 'S' ? 'http://landregistry.data.gov.uk/def/ppi/semi-detached'
+      : lrType === 'T' ? 'http://landregistry.data.gov.uk/def/ppi/terraced'
+      : lrType === 'D' ? 'http://landregistry.data.gov.uk/def/ppi/detached'
       : ''
 
-    // SPARQL query — returns address, price, date, property type, new build flag
+    const typeFilter = lrTypeUri
+      ? `FILTER(?propertyType = <${lrTypeUri}>)`
+      : ''
+
+    // SPARQL query — returns address, price, date, property type
     const sparql = `
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 
-SELECT ?paon ?saon ?street ?postcode ?amount ?date ?propertyType ?newBuild WHERE {
+SELECT ?postcode ?amount ?date ?propertyType WHERE {
   ?transx lrppi:pricePaid ?amount ;
           lrppi:transactionDate ?date ;
           lrppi:propertyType ?propertyType ;
           lrppi:newBuild ?newBuild ;
           lrppi:propertyAddress ?addr .
   ?addr lrcommon:postcode ?postcode .
-  OPTIONAL { ?addr lrcommon:paon ?paon }
-  OPTIONAL { ?addr lrcommon:saon ?saon }
-  OPTIONAL { ?addr lrcommon:street ?street }
-  FILTER(STRSTARTS(?postcode, "${outcode}"))
+  FILTER(STRSTARTS(STR(?postcode), "${outcode}"))
   FILTER(?date >= "${cutoffStr}"^^xsd:date)
-  FILTER(?newBuild = false)
+  FILTER(?newBuild = "false"^^xsd:boolean)
   ${typeFilter}
 }
 ORDER BY DESC(?date)
 LIMIT 50
 `.trim()
 
-    const sparqlUrl = 'https://landregistry.data.gov.uk/landregistry/query'
+    const sparqlUrl = `https://landregistry.data.gov.uk/landregistry/query?query=${encodeURIComponent(sparql)}&output=json`
     const res = await fetch(sparqlUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/sparql-query',
-        'Accept': 'application/sparql-results+json',
-      },
-      body: sparql,
+      method: 'GET',
+      headers: { 'Accept': 'application/sparql-results+json' },
       cache: 'no-store',
     })
 
