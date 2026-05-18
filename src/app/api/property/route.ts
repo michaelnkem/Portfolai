@@ -47,6 +47,8 @@ export async function GET(req: NextRequest) {
         || MARKET_DATA.cities.London
 
       const propRecord = prop as Record<string, unknown>
+      const postcode = String(propRecord.postcode || '')
+      const outcode = postcode.split(' ')[0] // e.g. "EN3" from "EN3 5NX"
 
       const defaults = {
         serviceCharge: String(propRecord.property_type || '').toLowerCase().includes('flat') ? 2000 : 0,
@@ -63,6 +65,49 @@ export async function GET(req: NextRequest) {
       )
 
       const price = Number(propRecord.last_sold_price || 0)
+
+      // ── Estimated current value using district price trends ──────────────────
+      // Fetch price trends for the property's outcode (e.g. EN3, SW1A, M1)
+      // Use the avg growth across all available months to derive an annual rate
+      // Fall back to city 5yr average if no trend data available
+      let estimatedCurrentValue = 0
+      if (price && propRecord.last_sold_date) {
+        try {
+          const trendRes = await fetch(
+            `https://api.homedata.co.uk/api/price_trends/${outcode}/`,
+            { headers: { Authorization: `Api-Key ${process.env.HOMEDATA_API_KEY}` }, cache: 'no-store' }
+          )
+          if (trendRes.ok) {
+            const trendData = await trendRes.json()
+            const monthlyPrices: Record<string, number> = trendData.monthly_average_prices || {}
+            const months = Object.keys(monthlyPrices).sort()
+
+            if (months.length >= 12) {
+              // Calculate annualised growth from earliest to latest month in dataset
+              const earliest = monthlyPrices[months[0]]
+              const latest = monthlyPrices[months[months.length - 1]]
+              const yearSpan = months.length / 12
+              const totalGrowth = latest / earliest - 1
+              const annualRate = Math.pow(1 + totalGrowth, 1 / yearSpan) - 1
+
+              const soldYear = Number(String(propRecord.last_sold_date).slice(0, 4))
+              const yearsHeld = Math.max(0, 2026 - soldYear)
+              estimatedCurrentValue = Math.round(price * Math.pow(1 + annualRate, yearsHeld))
+            }
+          }
+        } catch (e) {
+          console.log('Price trend fetch failed, using fallback:', e)
+        }
+
+        // Fallback: city 5yr average if trend data unavailable
+        if (!estimatedCurrentValue) {
+          const soldYear = Number(String(propRecord.last_sold_date).slice(0, 4))
+          const yearsHeld = Math.max(0, 2026 - soldYear)
+          const annualRate = (cityData.capitalGrowth5yr / 5) / 100
+          estimatedCurrentValue = Math.round(price * Math.pow(1 + annualRate, yearsHeld))
+        }
+      }
+
       const grossYield = price ? calcGrossYield(price, estimatedRent) : 0
       const netYield = price ? calcNetYield(
         price, estimatedRent,
@@ -82,6 +127,7 @@ export async function GET(req: NextRequest) {
         cityName,
         enriched: {
           estimatedRent,
+          estimatedCurrentValue,
           grossYield,
           netYield,
           netMonthly: price ? calcNetMonthlyIncome(
