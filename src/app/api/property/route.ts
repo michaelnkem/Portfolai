@@ -320,35 +320,34 @@ async function calcComparableValuation(
       : ''
 
     const typeFilter = lrTypeUri
-      ? `FILTER(?propertyType = <${lrTypeUri}>)`
-      : ''
+      ? `?transx <http://landregistry.data.gov.uk/def/ppi/propertyType> <${lrTypeUri}> .`
+      : `?transx <http://landregistry.data.gov.uk/def/ppi/propertyType> ?propertyType .`
 
-    // SPARQL query — returns address, price, date, property type
+    // SPARQL query using full URIs — correct format per Land Registry docs
     const sparql = `
-PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
-PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
-
-SELECT ?postcode ?amount ?date ?propertyType WHERE {
-  ?transx lrppi:pricePaid ?amount ;
-          lrppi:transactionDate ?date ;
-          lrppi:propertyType ?propertyType ;
-          lrppi:newBuild ?newBuild ;
-          lrppi:propertyAddress ?addr .
-  ?addr lrcommon:postcode ?postcode .
-  FILTER(STRSTARTS(STR(?postcode), "${outcode}"))
-  FILTER(?date >= "${cutoffStr}"^^xsd:date)
-  FILTER(?newBuild = "false"^^xsd:boolean)
+SELECT ?postcode ?amount ?date WHERE {
+  ?transx a <http://landregistry.data.gov.uk/def/ppi/TransactionRecord> .
+  ?transx <http://landregistry.data.gov.uk/def/ppi/pricePaid> ?amount .
+  ?transx <http://landregistry.data.gov.uk/def/ppi/transactionDate> ?date .
+  ?transx <http://landregistry.data.gov.uk/def/ppi/newBuild> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
   ${typeFilter}
+  ?transx <http://landregistry.data.gov.uk/def/ppi/propertyAddress> ?addr .
+  ?addr <http://landregistry.data.gov.uk/def/common/postcode> ?postcode .
+  FILTER(STRSTARTS(STR(?postcode), "${outcode}"))
+  FILTER(?date >= "${cutoffStr}"^^<http://www.w3.org/2001/XMLSchema#date>)
 }
 ORDER BY DESC(?date)
 LIMIT 50
 `.trim()
 
-    const sparqlUrl = `https://landregistry.data.gov.uk/landregistry/query?query=${encodeURIComponent(sparql)}&output=json`
+    // POST with form-encoded body — correct per Land Registry API docs
+    const sparqlUrl = 'http://landregistry.data.gov.uk/landregistry/query'
+    const body = new URLSearchParams({ query: sparql, output: 'json' })
+
     const res = await fetch(sparqlUrl, {
-      method: 'GET',
-      headers: { 'Accept': 'application/sparql-results+json' },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body: body.toString(),
       cache: 'no-store',
     })
 
