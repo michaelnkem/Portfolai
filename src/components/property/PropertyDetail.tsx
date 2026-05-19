@@ -86,16 +86,30 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
       <div className="w-full max-w-3xl bg-panel border-l border-border overflow-y-auto flex flex-col">
         {/* Header */}
         <div className="sticky top-0 z-10 bg-panel border-b border-border p-5 flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-[10px] font-mono tracking-wide text-accent mb-1">PROPERTY INTELLIGENCE</p>
-            <h2 className="font-display font-black text-xl text-white leading-tight line-clamp-2">
-              {String(p?.full_address || p?.address || '')}
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-mono tracking-wide text-accent mb-2">PROPERTY ANALYSIS</p>
+            <h2 className="font-display font-black text-2xl text-white leading-tight mb-1">
+              {String(p?.full_address || p?.address || 'Unknown Address')}
             </h2>
-            <p className="text-mid text-sm mt-1">
-              {String(p?.property_type ?? '')} · {String(p?.bedrooms ?? '')}bd
-              {p?.tenure ? ` · ${String(p.tenure)}` : ''}
-              {cityName ? ` · ${String(cityName)}` : ''}
-            </p>
+            <div className="flex items-center gap-2 flex-wrap mt-1">
+              {p?.postcode && (
+                <span className="text-xs font-mono bg-accent/10 border border-accent/20 text-accent px-2 py-0.5 rounded">
+                  {String(p.postcode)}
+                </span>
+              )}
+              {p?.property_type && (
+                <span className="text-xs text-mid">{String(p.property_type)}</span>
+              )}
+              {p?.bedrooms && (
+                <span className="text-xs text-mid">· {String(p.bedrooms)} bed</span>
+              )}
+              {p?.tenure && (
+                <span className="text-xs text-mid">· {String(p.tenure)}</span>
+              )}
+              {cityName && (
+                <span className="text-xs text-mid">· {String(cityName)}</span>
+              )}
+            </div>
           </div>
           <div className="flex gap-2 shrink-0">
             <button onClick={onAI} className="btn-primary text-xs px-3 py-2">🤖 AI</button>
