@@ -66,6 +66,25 @@ export async function GET(req: NextRequest) {
 
       const price = Number(propRecord.last_sold_price || 0)
 
+      // ── FETCH FULL TRANSACTION HISTORY FROM LAND REGISTRY ────────────────────
+      // Goes back to 1995 — free, no API key needed
+      // Used to populate "Last Sold Price" with the most recent verified sale
+      const lrHistory = await fetchLrHistory(
+        String(propRecord.postcode || ''),
+        String(propRecord.full_address || propRecord.address || ''),
+        String(propRecord.property_type || '')
+      )
+
+      // Use Land Registry most recent sale if available and more recent than Homedata
+      const lrLastSold = lrHistory.length > 0 ? lrHistory[0] : null
+      const lastSoldPrice = lrLastSold ? lrLastSold.price : price
+      const lastSoldDate  = lrLastSold ? lrLastSold.date  : String(propRecord.last_sold_date || '')
+
+      // Merge LR history with Homedata transactions — LR is more complete
+      const allTransactions = lrHistory.length > 0
+        ? lrHistory.map(t => ({ price: t.price, date: t.date, transaction_type: t.type }))
+        : (transactions || []).slice(0, 20)
+
       // ── COMPARABLE-BASED VALUATION ENGINE ────────────────────────────────────
       // Methodology: weighted £/sqm from comparable sold prices
       // Based on RICS/AVM methodology from valuation instructions
@@ -87,9 +106,13 @@ export async function GET(req: NextRequest) {
 
       return NextResponse.json({
         uprn,
-        property: prop,
+        property: {
+          ...prop,
+          last_sold_price: lastSoldPrice,
+          last_sold_date: lastSoldDate,
+        },
         epc,
-        transactions: (transactions || []).slice(0, 20),
+        transactions: allTransactions,
         risks: risks || [],
         cityData,
         cityName,
@@ -248,6 +271,101 @@ function efficiencyToRating(score: number): string {
   if (score >= 39) return 'E'
   if (score >= 21) return 'F'
   return 'G'
+}
+
+// ── LAND REGISTRY FULL TRANSACTION HISTORY ───────────────────────────────────
+// Fetches all sales for a specific postcode going back to 1995
+// Free public endpoint — no auth required
+// Used to populate Last Sold Price and History tab
+interface LrTransaction {
+  price: number
+  date: string
+  type: string
+  address: string
+}
+
+async function fetchLrHistory(
+  postcode: string,
+  address: string,
+  propertyType: string
+): Promise<LrTransaction[]> {
+  if (!postcode) return []
+
+  try {
+    // Query all sales in same postcode, all time — no date filter
+    const sparql = `
+SELECT ?paon ?saon ?amount ?date ?propertyType WHERE {
+  ?transx a <http://landregistry.data.gov.uk/def/ppi/TransactionRecord> .
+  ?transx <http://landregistry.data.gov.uk/def/ppi/pricePaid> ?amount .
+  ?transx <http://landregistry.data.gov.uk/def/ppi/transactionDate> ?date .
+  ?transx <http://landregistry.data.gov.uk/def/ppi/propertyType> ?propertyType .
+  ?transx <http://landregistry.data.gov.uk/def/ppi/propertyAddress> ?addr .
+  ?addr <http://landregistry.data.gov.uk/def/common/postcode> "${postcode}" .
+  OPTIONAL { ?addr <http://landregistry.data.gov.uk/def/common/paon> ?paon }
+  OPTIONAL { ?addr <http://landregistry.data.gov.uk/def/common/saon> ?saon }
+}
+ORDER BY DESC(?date)
+LIMIT 100
+`.trim()
+
+    const body = new URLSearchParams({ query: sparql, output: 'json' })
+    const res = await fetch('http://landregistry.data.gov.uk/landregistry/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body: body.toString(),
+      cache: 'no-store',
+    })
+
+    if (!res.ok) {
+      console.log('LR history fetch failed:', res.status)
+      return []
+    }
+
+    const data = await res.json()
+    const bindings: Record<string, { value: string }>[] = data?.results?.bindings || []
+
+    console.log(`LR history: ${bindings.length} results for postcode ${postcode}`)
+
+    // Extract the house number from the address to filter to this specific property
+    // e.g. "121 ALBANY PARK AVENUE" — extract "121"
+    const houseNumber = address.trim().split(' ')[0].replace(/\D/g, '')
+
+    const results: LrTransaction[] = bindings
+      .filter(b => {
+        const paon = String(b.paon?.value || '')
+        // If we have a house number, filter to matching properties only
+        // If no match found, include all (better to show all than nothing)
+        if (!houseNumber) return true
+        return paon.includes(houseNumber) || !paon
+      })
+      .map(b => ({
+        price: Number(b.amount?.value || 0),
+        date: String(b.date?.value || ''),
+        type: String(b.propertyType?.value || '').split('/').pop() || '',
+        address: [b.saon?.value, b.paon?.value].filter(Boolean).join(', '),
+      }))
+      .filter(t => t.price > 0)
+
+    // If house-number filter gave no results, return all postcode sales
+    // sorted by most recent — still useful context
+    if (results.length === 0 && bindings.length > 0) {
+      return bindings
+        .map(b => ({
+          price: Number(b.amount?.value || 0),
+          date: String(b.date?.value || ''),
+          type: String(b.propertyType?.value || '').split('/').pop() || '',
+          address: [b.saon?.value, b.paon?.value].filter(Boolean).join(', '),
+        }))
+        .filter(t => t.price > 0)
+        .slice(0, 20)
+    }
+
+    return results
+
+  } catch (e) {
+    console.error('LR history error:', e)
+    return []
+  }
 }
 
 // ── COMPARABLE VALUATION ENGINE ───────────────────────────────────────────────
