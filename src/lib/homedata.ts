@@ -155,13 +155,33 @@ export async function getPriceTrends(outcode: string): Promise<PriceTrend[]> {
     return []
   }
   const data = await res.json()
-  // Handle all known response shapes
+
+  // Homedata returns { monthly_average_prices: { "2025-05": 385000, ... } }
+  // Convert the date→price map into PriceTrend[] so the valuation engine can use it
+  if (
+    data.monthly_average_prices &&
+    typeof data.monthly_average_prices === 'object' &&
+    !Array.isArray(data.monthly_average_prices)
+  ) {
+    const map = data.monthly_average_prices as Record<string, number>
+    const items = Object.entries(map).map(([period, price]) => ({
+      outcode,
+      property_type: '',
+      period,
+      median_price: price,
+      mean_price: price,
+      count: 1,
+    }))
+    console.log(`getPriceTrends ${outcode}: monthly_average_prices shape, ${items.length} months`)
+    return items
+  }
+
+  // Fallback: handle array or other known response shapes
   const items =
     (Array.isArray(data) ? data : null) ||
     data.results ||
     data.data ||
     data.trends ||
-    data.monthly_average_prices ||
     data[outcode] ||
     data[outcode.toLowerCase()] ||
     []
