@@ -274,9 +274,8 @@ function efficiencyToRating(score: number): string {
 }
 
 // ── COMPARABLE VALUATION ENGINE ───────────────────────────────────────────────
-// Data source: HM Land Registry Price Paid Data (free, no API key required)
-// SPARQL endpoint: landregistry.data.gov.uk/landregistry/query
-// Methodology: weighted £/sqm from comparable sold prices (RICS/AVM standard)
+// Data source: Homedata price_trends endpoint
+// Methodology: area-adjusted £/sqm from local monthly average prices
 interface ValuationResult {
   fairValue: number
   lowValue: number
@@ -286,22 +285,21 @@ interface ValuationResult {
   method: string
 }
 
-// Land Registry property type codes
-// D=Detached, S=Semi-Detached, T=Terraced, F=Flat/Maisonette, O=Other
-function toLrType(propertyType: string): string {
+// Typical floor area (sqm) by property type — used to derive £/sqm from avg sold price
+function getTypicalFloorArea(propertyType: string): number {
   const t = propertyType.toLowerCase()
-  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 'F'
-  if (t.includes('semi')) return 'S'
-  if (t.includes('terrace')) return 'T'
-  if (t.includes('detached') || t.includes('bungalow')) return 'D'
-  return '' // no filter — accept all types
+  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 60
+  if (t.includes('semi')) return 88
+  if (t.includes('terrace')) return 80
+  if (t.includes('detached') && !t.includes('semi')) return 110
+  return 80
 }
 
 async function calcComparableValuation(
-  uprn: string,
+  _uprn: string,
   prop: Record<string, unknown>,
   cityData: Record<string, number>,
-  _apiKey: string // kept for signature compatibility — not needed for LR
+  apiKey: string
 ): Promise<ValuationResult> {
 
   const subjectArea   = Number(prop.internal_area_sqm || prop.epc_floor_area || 0)
@@ -328,122 +326,52 @@ async function calcComparableValuation(
   if (!outcode) return fallback()
 
   try {
-    // ── QUERY LAND REGISTRY SPARQL ────────────────────────────────────────────
-    // Fetch sold prices for same outcode, same property type, last 18 months
-    // Free public endpoint — no auth required
-    const lrType = toLrType(subjectType)
-    const cutoffDate = new Date()
-    cutoffDate.setMonth(cutoffDate.getMonth() - 18)
-    const cutoffStr = cutoffDate.toISOString().slice(0, 10)
-
-    // Correct LR endpoint — address.json with exact postcode prefix
-    // Returns properties matching the outcode with transaction history
-    const lrUrl = `http://landregistry.data.gov.uk/data/ppi/address.json?postcode=${encodeURIComponent(outcode)}&_pageSize=50&_sort=-transactionDate`
-
-    const res = await fetch(lrUrl, {
-      headers: { 'Accept': 'application/json' },
+    // ── FETCH HOMEDATA PRICE TRENDS ───────────────────────────────────────────
+    const trendsUrl = `https://api.homedata.co.uk/api/price_trends/${encodeURIComponent(outcode)}/`
+    const res = await fetch(trendsUrl, {
+      headers: { Authorization: `Api-Key ${apiKey}` },
       cache: 'no-store',
     })
 
     if (!res.ok) {
-      console.log('Land Registry SPARQL failed:', res.status)
+      console.log(`Homedata price_trends failed for ${outcode}:`, res.status)
       return fallback()
     }
 
-    const lrData = await res.json()
-    const addresses: Record<string, unknown>[] = (lrData?.result as Record<string, unknown>)?.items || []
+    const trendsData = await res.json()
+    console.log(`Homedata price_trends keys for ${outcode}:`, Object.keys(trendsData || {}))
 
-    console.log(`LR address: ${addresses.length} addresses for outcode ${outcode}`)
+    // Extract monthly average prices — handle common response shapes
+    const monthlyPrices: Record<string, unknown>[] = (
+      trendsData?.monthly_average_prices ||
+      trendsData?.data?.monthly_average_prices ||
+      trendsData?.results?.monthly_average_prices ||
+      []
+    )
 
-    if (addresses.length < 2) return fallback()
-
-    // For each address, fetch its transaction history to get sold prices
-    // Limit to 10 addresses to avoid too many calls
-    const now = Date.now()
-
-    interface ScoredComp {
-      pricePerSqm: number
-      soldPrice: number
-      floorArea: number
-      score: number
-      date: string
-    }
-
-    const scored: ScoredComp[] = []
-
-    for (const addr of addresses.slice(0, 15)) {
-      const addrUrl = String(addr._about || '')
-      if (!addrUrl) continue
-
-      try {
-        const txRes = await fetch(`${addrUrl}.json`, {
-          headers: { 'Accept': 'application/json' },
-          cache: 'no-store',
-        })
-        if (!txRes.ok) continue
-
-        const txData = await txRes.json()
-        const txItems: Record<string, unknown>[] = (txData?.result as Record<string, unknown>)?.primaryTopic?.soldDate || []
-
-        const addrPostcode = String(addr.postcode || '')
-        const addrType = String(addr.type || '').toLowerCase()
-
-        for (const tx of Array.isArray(txItems) ? txItems : [txItems]) {
-          if (!tx) continue
-          const soldPrice = Number(tx.pricePaid || 0)
-          const soldDate = String(tx.transactionDate || '')
-
-          if (!soldPrice || soldPrice < 10000) continue
-
-          // Filter by date — within 18 months
-          const soldMs = soldDate ? new Date(soldDate).getTime() : 0
-          if (soldMs && (now - soldMs) > 18 * 30 * 86400000) continue
-
-          const estimatedArea = lrType === 'F' ? 60
-            : lrType === 'S' ? 88
-            : lrType === 'T' ? 80
-            : lrType === 'D' ? 110
-            : estimateFloorArea(subjectBeds, subjectType)
-
-          const pricePerSqm = soldPrice / estimatedArea
-          if (pricePerSqm < 500 || pricePerSqm > 25000) continue
-
-          const sizeSimilarity = 0.8
-          const samePostcode = addrPostcode.trim().toUpperCase() === postcode.trim().toUpperCase()
-          const distanceScore = samePostcode ? 1.0 : 0.7
-          const ageMs = now - soldMs
-          const maxAgeMs = 18 * 30 * 86400000
-          const recencyScore = Math.max(0, 1 - ageMs / maxAgeMs)
-          const typeMatchScore = lrType && addrType.includes(
-            lrType === 'S' ? 'semi' : lrType === 'T' ? 'terrace' : lrType === 'F' ? 'flat' : 'detach'
-          ) ? 1.0 : 0.6
-
-          const score =
-            (sizeSimilarity * 0.35) +
-            (distanceScore  * 0.25) +
-            (recencyScore   * 0.25) +
-            (typeMatchScore * 0.15)
-
-          scored.push({ pricePerSqm, soldPrice, floorArea: estimatedArea, score, date: soldDate })
-        }
-      } catch (e) {
-        console.log('TX fetch error:', e)
-        continue
-      }
-    }
-
-    if (scored.length < 2) {
-      console.log('Too few valid LR comps — using fallback')
+    // Last 12 months
+    const last12 = monthlyPrices.slice(-12)
+    if (last12.length < 3) {
+      console.log(`Too few price trend months (${last12.length}) for ${outcode} — using fallback`)
       return fallback()
     }
 
-    // ── WEIGHTED £/SQM ────────────────────────────────────────────────────────
-    const totalScore  = scored.reduce((s, c) => s + c.score, 0)
-    const weightedPsm = scored.reduce((s, c) => s + c.pricePerSqm * c.score, 0) / totalScore
+    const prices = last12
+      .map(m => Number(m.average_price ?? m.avg_price ?? m.price ?? m.value ?? 0))
+      .filter(p => p > 50000) // sanity filter — reject implausible values
 
-    // ── BASE VALUE ────────────────────────────────────────────────────────────
+    if (prices.length < 3) {
+      console.log(`Too few valid price points for ${outcode} — using fallback`)
+      return fallback()
+    }
+
+    const avgPrice = prices.reduce((s, p) => s + p, 0) / prices.length
+
+    // ── £/SQM FROM AREA-ADJUSTED AVERAGE ─────────────────────────────────────
+    const typicalArea   = getTypicalFloorArea(subjectType)
+    const pricePerSqm   = avgPrice / typicalArea
     const effectiveArea = subjectArea > 0 ? subjectArea : estimateFloorArea(subjectBeds, subjectType)
-    const baseValue = Math.round(weightedPsm * effectiveArea)
+    const baseValue     = Math.round(pricePerSqm * effectiveArea)
 
     // ── FEATURE ADJUSTMENTS ───────────────────────────────────────────────────
     let adjustment = 1.0
@@ -458,12 +386,11 @@ async function calcComparableValuation(
     const adjustedValue = Math.round(baseValue * adjustment)
 
     // ── CONFIDENCE SCORE ──────────────────────────────────────────────────────
-    let confidence = 50
-    if (scored.length >= 5)  confidence += 15
-    if (scored.length >= 15) confidence += 10
-    if (subjectArea > 0)     confidence += 10 // actual floor area available
-    else                     confidence -= 5  // using estimated floor area
-    if (scored.some(c => c.pricePerSqm > 0)) confidence += 5
+    let confidence = 60
+    if (prices.length >= 9)  confidence += 10
+    if (prices.length >= 12) confidence += 5
+    if (subjectArea > 0)     confidence += 10
+    else                     confidence -= 5
     confidence = Math.min(88, Math.max(40, confidence))
 
     // ── VALUATION RANGE ───────────────────────────────────────────────────────
@@ -472,12 +399,12 @@ async function calcComparableValuation(
     const highValue = Math.round(adjustedValue * (1 + spread) / 1000) * 1000
     const fairValue = Math.round(adjustedValue / 1000) * 1000
 
-    console.log(`LR Valuation: £${fairValue.toLocaleString()} (${scored.length} comps, ${confidence}% confidence, £${Math.round(weightedPsm)}/sqm, area ${effectiveArea}sqm)`)
+    console.log(`Homedata Valuation: £${fairValue.toLocaleString()} (${prices.length} months, ${confidence}% confidence, £${Math.round(pricePerSqm)}/sqm, area ${effectiveArea}sqm, avg sold £${Math.round(avgPrice).toLocaleString()})`)
 
-    return { fairValue, lowValue, highValue, confidence, compsUsed: scored.length, method: 'lr_comparable_psm' }
+    return { fairValue, lowValue, highValue, confidence, compsUsed: prices.length, method: 'homedata_price_trends' }
 
   } catch (e) {
-    console.error('LR valuation engine error:', e)
+    console.error('Homedata valuation engine error:', e)
     return fallback()
   }
 }
