@@ -148,11 +148,25 @@ export async function getTransactions(uprn: string): Promise<SaleRecord[]> {
 export async function getPriceTrends(outcode: string): Promise<PriceTrend[]> {
   const res = await fetch(
     `${HOMEDATA_BASE}/api/price_trends/${outcode}/`,
-    { headers: headers(), next: { revalidate: 3600 } },
+    { headers: headers(), cache: 'no-store' },
   )
-  if (!res.ok) return []
+  if (!res.ok) {
+    console.error(`getPriceTrends ${outcode} failed:`, res.status)
+    return []
+  }
   const data = await res.json()
-  return data.results || []
+  // Handle all known response shapes
+  const items =
+    (Array.isArray(data) ? data : null) ||
+    data.results ||
+    data.data ||
+    data.trends ||
+    data.monthly_average_prices ||
+    data[outcode] ||
+    data[outcode.toLowerCase()] ||
+    []
+  console.log(`getPriceTrends ${outcode}: keys=${Object.keys(data || {}).join(',')}, items=${Array.isArray(items) ? items.length : 'not-array'}`)
+  return Array.isArray(items) ? items : []
 }
 
 // Comparable sales (10 calls — use carefully on free tier)
