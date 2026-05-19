@@ -88,12 +88,20 @@ export async function GET(req: NextRequest) {
 
       const floodRisk = (risks || []).find((r: Record<string,unknown>) => r.risk_type === 'flood_rivers_sea')
 
+      // Normalize bedroom/bathroom — Homedata uses varying field names
+      const beds = propRecord.bedrooms ?? propRecord.bedroom_count ?? propRecord.num_bedrooms
+        ?? propRecord.beds ?? propRecord.habitable_rooms ?? null
+      const baths = propRecord.bathrooms ?? propRecord.bathroom_count ?? propRecord.num_bathrooms
+        ?? propRecord.baths ?? null
+
       return NextResponse.json({
         uprn,
         property: {
           ...prop,
           last_sold_price: lastSoldPrice,
           last_sold_date: lastSoldDate,
+          bedrooms: beds,
+          bathrooms: baths,
         },
         epc,
         transactions: allTransactions,
