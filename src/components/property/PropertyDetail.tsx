@@ -99,11 +99,15 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
               )}
               {p?.property_type && (
                 <span className="text-xs text-mid">{String(p.property_type)}</span>
+              )}
               {(p?.bedrooms != null && p?.bedrooms !== '') && (
                 <span className="text-xs text-mid">· {String(p.bedrooms)} bed</span>
               )}
               {(p?.bathrooms != null && p?.bathrooms !== '') && (
                 <span className="text-xs text-mid">· {String(p.bathrooms)} bath</span>
+              )}
+              {p?.tenure && (
+                <span className="text-xs text-mid">· {String(p.tenure)}</span>
               )}
               {cityName && (
                 <span className="text-xs text-mid">· {String(cityName)}</span>
@@ -157,12 +161,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                   {[
                     ['Type', String(p?.property_type ?? '')],
                     ['Built', String(p?.construction_age_band ?? '')],
-                    ['Bedrooms', String(p?.bedrooms ?? '')],
+                    ['Bedrooms', (p?.bedrooms != null && p?.bedrooms !== '') ? String(p.bedrooms) : 'Not recorded'],
+                    ['Bathrooms', (p?.bathrooms != null && p?.bathrooms !== '') ? String(p.bathrooms) : 'Not recorded'],
                     ['Floor area', p?.internal_area_sqm ? `${p.internal_area_sqm}m²` : p?.epc_floor_area ? `${p.epc_floor_area}m²` : 'Unknown'],
                     ['Tenure', String(p?.tenure ?? '')],
                     ['Council Tax', p?.council_tax_band ? `Band ${p.council_tax_band}` : 'Unknown'],
-                                        ['Bedrooms', (p?.bedrooms != null && p?.bedrooms !== '') ? String(p.bedrooms) : 'Not recorded'],
-                    ['Bathrooms', (p?.bathrooms != null && p?.bathrooms !== '') ? String(p.bathrooms) : 'Not recorded'],
+                    ['Garden', p?.has_garden ? 'Yes' : p?.has_garden === false ? 'No' : 'Unknown'],
+                    ['Parking', p?.has_parking ? 'Yes' : p?.has_parking === false ? 'No' : 'Unknown'],
                   ].filter(([,v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => (
                     <div key={k as string} className="flex justify-between py-2 border-b border-border text-sm">
                       <span className="text-mid">{k}</span>
