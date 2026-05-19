@@ -344,17 +344,32 @@ async function calcComparableValuation(
       return fallback()
     }
 
-    // Filter to matching property type if possible (D/S/T/F)
+    // Filter to matching property type if possible
+    // Homedata may return codes (D/S/T/F) or full words (Detached/Semi-Detached/Terraced/Flat)
     const lrType = getLrType(subjectType)
-    const typeMatches = lrType ? trends.filter(t => t.property_type === lrType) : []
-    const pool = typeMatches.length >= 3 ? typeMatches : trends
+    const typeMatches = lrType ? trends.filter(t => {
+      const pt = String(t.property_type || '').toLowerCase()
+      return pt === lrType.toLowerCase() ||
+        (lrType === 'F' && (pt.includes('flat') || pt.includes('maisonette') || pt.includes('apartment'))) ||
+        (lrType === 'S' && pt.includes('semi')) ||
+        (lrType === 'T' && (pt.includes('terrace') || pt === 't')) ||
+        (lrType === 'D' && (pt.includes('detach') || pt.includes('bungalow') || pt === 'd'))
+    }) : []
+    const pool = typeMatches.length >= 1 ? typeMatches : trends
+    console.log(`Valuation pool: ${pool.length} records (type-matched: ${typeMatches.length}, lrType: ${lrType || 'none'})`)
 
     // Sort by period descending, take last 12 months
     const sorted = [...pool].sort((a, b) => b.period.localeCompare(a.period)).slice(0, 12)
 
     const prices = sorted
-      .map(t => t.median_price || t.mean_price)
-      .filter(p => p > 50000)
+      .map(t => {
+        const raw = t as unknown as Record<string, unknown>
+        return Number(
+          t.median_price || t.mean_price ||
+          raw.average_price || raw.avg_price || raw.price || raw.value || 0
+        )
+      })
+      .filter(p => p > 10000) // sanity filter — must be > £10k
 
     if (prices.length < 3) {
       console.log(`Too few valid price points for ${outcode} — using fallback`)
