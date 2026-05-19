@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
-  searchAddress, getProperty, getEpc, getTransactions, getRisks
+  getProperty, getEpc, getTransactions, getRisks, getPriceTrends
 } from '@/lib/homedata'
 import { MARKET_DATA, calcGrossYield, calcNetYield, calcNetMonthlyIncome } from '@/lib/market-data'
 
@@ -92,7 +92,6 @@ export async function GET(req: NextRequest) {
         uprn,
         propRecord,
         cityData,
-        process.env.HOMEDATA_API_KEY!
       )
 
       const grossYield = price ? calcGrossYield(price, estimatedRent) : 0
@@ -133,7 +132,7 @@ export async function GET(req: NextRequest) {
           capitalGrowth: cityData.capitalGrowth1yr,
           totalROI: parseFloat((netYield + cityData.capitalGrowth1yr).toFixed(1)),
           floodRisk: floodRisk ? String((floodRisk as Record<string,unknown>).label) : 'Unknown',
-          epcRating: epc?.current_energy_efficiency
+          epcRating: epc?.current_energy_efficiency != null
             ? efficiencyToRating(epc.current_energy_efficiency)
             : String(propRecord.current_energy_rating || 'Unknown'),
           defaults,
@@ -285,6 +284,16 @@ interface ValuationResult {
   method: string
 }
 
+// Maps property type string to Land Registry / Homedata type code (D/S/T/F)
+function getLrType(propertyType: string): string {
+  const t = propertyType.toLowerCase()
+  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 'F'
+  if (t.includes('semi')) return 'S'
+  if (t.includes('terrace')) return 'T'
+  if (t.includes('detached') || t.includes('bungalow')) return 'D'
+  return ''
+}
+
 // Typical floor area (sqm) by property type — used to derive £/sqm from avg sold price
 function getTypicalFloorArea(propertyType: string): number {
   const t = propertyType.toLowerCase()
@@ -299,7 +308,6 @@ async function calcComparableValuation(
   _uprn: string,
   prop: Record<string, unknown>,
   cityData: Record<string, number>,
-  apiKey: string
 ): Promise<ValuationResult> {
 
   const subjectArea   = Number(prop.internal_area_sqm || prop.epc_floor_area || 0)
@@ -317,7 +325,7 @@ async function calcComparableValuation(
     const price = Number(prop.last_sold_price || 0)
     if (!price) return { fairValue: 0, lowValue: 0, highValue: 0, confidence: 0, compsUsed: 0, method: 'none' }
     const soldYear  = Number(String(prop.last_sold_date || '2015').slice(0, 4))
-    const yearsHeld = Math.max(0, 2026 - soldYear)
+    const yearsHeld = Math.max(0, new Date().getFullYear() - soldYear)
     const annualRate = Math.max(0.01, Math.min(0.08, (cityData.capitalGrowth5yr / 5) / 100))
     const fair = Math.round(price * Math.pow(1 + annualRate, yearsHeld))
     return { fairValue: fair, lowValue: Math.round(fair * 0.95), highValue: Math.round(fair * 1.05), confidence: 45, compsUsed: 0, method: 'growth_rate_fallback' }
@@ -327,38 +335,26 @@ async function calcComparableValuation(
 
   try {
     // ── FETCH HOMEDATA PRICE TRENDS ───────────────────────────────────────────
-    const trendsUrl = `https://api.homedata.co.uk/api/price_trends/${encodeURIComponent(outcode)}/`
-    const res = await fetch(trendsUrl, {
-      headers: { Authorization: `Api-Key ${apiKey}` },
-      cache: 'no-store',
-    })
+    // Response: PriceTrend[] — each item has median_price, mean_price, property_type, period
+    const trends = await getPriceTrends(outcode)
+    console.log(`Homedata price_trends: ${trends.length} records for ${outcode}`)
 
-    if (!res.ok) {
-      console.log(`Homedata price_trends failed for ${outcode}:`, res.status)
+    if (trends.length < 1) {
+      console.log(`No price trend data for ${outcode} — using fallback`)
       return fallback()
     }
 
-    const trendsData = await res.json()
-    console.log(`Homedata price_trends keys for ${outcode}:`, Object.keys(trendsData || {}))
+    // Filter to matching property type if possible (D/S/T/F)
+    const lrType = getLrType(subjectType)
+    const typeMatches = lrType ? trends.filter(t => t.property_type === lrType) : []
+    const pool = typeMatches.length >= 3 ? typeMatches : trends
 
-    // Extract monthly average prices — handle common response shapes
-    const monthlyPrices: Record<string, unknown>[] = (
-      trendsData?.monthly_average_prices ||
-      trendsData?.data?.monthly_average_prices ||
-      trendsData?.results?.monthly_average_prices ||
-      []
-    )
+    // Sort by period descending, take last 12 months
+    const sorted = [...pool].sort((a, b) => b.period.localeCompare(a.period)).slice(0, 12)
 
-    // Last 12 months
-    const last12 = monthlyPrices.slice(-12)
-    if (last12.length < 3) {
-      console.log(`Too few price trend months (${last12.length}) for ${outcode} — using fallback`)
-      return fallback()
-    }
-
-    const prices = last12
-      .map(m => Number(m.average_price ?? m.avg_price ?? m.price ?? m.value ?? 0))
-      .filter(p => p > 50000) // sanity filter — reject implausible values
+    const prices = sorted
+      .map(t => t.median_price || t.mean_price)
+      .filter(p => p > 50000)
 
     if (prices.length < 3) {
       console.log(`Too few valid price points for ${outcode} — using fallback`)
@@ -399,7 +395,7 @@ async function calcComparableValuation(
     const highValue = Math.round(adjustedValue * (1 + spread) / 1000) * 1000
     const fairValue = Math.round(adjustedValue / 1000) * 1000
 
-    console.log(`Homedata Valuation: £${fairValue.toLocaleString()} (${prices.length} months, ${confidence}% confidence, £${Math.round(pricePerSqm)}/sqm, area ${effectiveArea}sqm, avg sold £${Math.round(avgPrice).toLocaleString()})`)
+    console.log(`Homedata Valuation: £${fairValue.toLocaleString()} (${prices.length} periods, ${confidence}% confidence, £${Math.round(pricePerSqm)}/sqm, area ${effectiveArea}sqm, median £${Math.round(avgPrice).toLocaleString()}, type ${lrType || 'any'})`)
 
     return { fairValue, lowValue, highValue, confidence, compsUsed: prices.length, method: 'homedata_price_trends' }
 
@@ -446,7 +442,9 @@ async function fetchLrHistory(
     const houseNumber = address.trim().split(' ')[0].replace(/\D/g, '')
     const results: LrTransaction[] = []
 
+    let fetched = 0
     for (const addr of addresses) {
+      if (fetched >= 5) break // cap sequential requests to avoid Vercel timeouts
       const paon = String(addr.paon || '')
       if (houseNumber && paon && !paon.includes(houseNumber)) continue
 
@@ -455,6 +453,7 @@ async function fetchLrHistory(
 
       try {
         const txRes = await fetch(`${addrUrl}.json`, { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+        fetched++
         if (!txRes.ok) continue
 
         const txData = await txRes.json()
