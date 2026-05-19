@@ -41,7 +41,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   // Estimated current value — prefer API-calculated (uses district price trends)
   // Fall back to client-side calculation if not provided
   const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
-  const yearsHeld = Math.max(0, 2026 - soldYear)
+  const yearsHeld = Math.max(0, new Date().getFullYear() - soldYear)
   const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
   const estimatedCurrentValue = (enriched?.estimatedCurrentValue as number)
     || (price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0)
