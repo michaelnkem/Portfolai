@@ -333,7 +333,25 @@ async function calcComparableValuation(
       return fallback()
     }
 
-    const avgPrice = prices.reduce((s, p) => s + p, 0) / prices.length
+    // Recency-weighted average: recent months count more than older ones
+    // Exponential decay with λ=0.15 — month 0 weight=1.0, month 11 weight≈0.19
+    const weights = prices.map((_, i) => Math.exp(-0.15 * i))
+    const totalWeight = weights.reduce((s, w) => s + w, 0)
+    const weightedAvgPrice = prices.reduce((s, p, i) => s + p * weights[i], 0) / totalWeight
+
+    // Trend projection: estimate monthly momentum from the data window,
+    // then project forward by ~2 months to account for Homedata data lag.
+    // Uses most-recent 3 months vs oldest 3 months to measure trend direction.
+    // Capped at ±0.8%/month to prevent wild extrapolation from thin data.
+    const recentSlice = prices.slice(0, Math.min(3, prices.length))
+    const olderSlice  = prices.slice(-Math.min(3, prices.length))
+    const recentAvg = recentSlice.reduce((s, p) => s + p, 0) / recentSlice.length
+    const olderAvg  = olderSlice.reduce((s, p) => s + p, 0)  / olderSlice.length
+    const monthsSpan = prices.length - 1
+    const rawMonthlyGrowth = monthsSpan > 0 ? (recentAvg / olderAvg - 1) / monthsSpan : 0
+    const monthlyGrowth = Math.max(-0.008, Math.min(0.008, rawMonthlyGrowth))
+    const dataLagMonths = 2
+    const avgPrice = weightedAvgPrice * Math.pow(1 + monthlyGrowth, dataLagMonths)
 
     const typicalArea = getTypicalFloorArea(subjectType)
     const pricePerSqm = avgPrice / typicalArea
@@ -370,7 +388,7 @@ async function calcComparableValuation(
     const highValue = Math.round(adjustedValue * (1 + spread) / 1000) * 1000
     const fairValue = Math.round(adjustedValue / 1000) * 1000
 
-    console.log(`Homedata Valuation: £${fairValue.toLocaleString()} (${prices.length} periods, ${confidence}% confidence, £${Math.round(pricePerSqm)}/sqm, area ${effectiveArea}sqm, avg £${Math.round(avgPrice).toLocaleString()})`)
+    console.log(`Homedata Valuation: £${fairValue.toLocaleString()} (${prices.length} periods, ${confidence}% conf, £${Math.round(pricePerSqm)}/sqm, area ${effectiveArea}sqm, weighted avg £${Math.round(weightedAvgPrice).toLocaleString()}, momentum ${(monthlyGrowth * 100).toFixed(2)}%/mo, projected avg £${Math.round(avgPrice).toLocaleString()})`)
 
     return { fairValue, lowValue, highValue, confidence, compsUsed: prices.length, method: 'homedata_price_trends' }
 
