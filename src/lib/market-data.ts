@@ -3,16 +3,17 @@
 
 export const MARKET_DATA = {
   dataAsOf: 'May 2026',
-  macro: {
+    macro: {
     bankRate: 4.0,
     inflation: 3.4,
     ukAvgPrice: 267957,
     ukAvgYield: 5.8,
     rentalGrowthForecast: 3.5,
     hpiGrowthForecast: 2.5,
+    ukHpi1yr: 1.2,        // ← ADD THIS LINE
     londonHpi1yr: -3.3,
     northernCitiesHpi1yr: 4.5,
-    sdltSurcharge: 5, // % additional for BTL/2nd home as of Oct 2024
+    sdltSurcharge: 5,
   },
   cities: {
     Manchester: {
