@@ -7,9 +7,10 @@ interface PortfolioProps {
   portfolio: Record<string, unknown>[]
   onRemove: (uprn: string) => void
   onAI: (p: null) => void
+  onSelectProperty: (data: Record<string, unknown>) => void
 }
 
-export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
+export function Portfolio({ portfolio, onRemove, onAI, onSelectProperty }: PortfolioProps) {
   const totalValue = portfolio.reduce((s, item) => {
     const p = item.property as Record<string, unknown>
     return s + ((p?.last_sold_price as number) || 0)
@@ -81,15 +82,14 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
             const cityName = item.cityName as string
 
             return (
-              <div key={i} className="card p-4 hover:border-mid transition-colors">
+              <div key={i} className="card p-4 hover:border-mid transition-colors cursor-pointer"
+                onClick={() => onSelectProperty(item)}>
                 <div className="flex items-center gap-4 flex-wrap">
-                  {/* Address */}
                   <div className="flex-1 min-w-[200px]">
                     <p className="text-sm font-semibold text-white line-clamp-1">{addr?.split(',')[0]}</p>
                     <p className="text-xs text-mid">{cityName} · {p?.property_type as string} · {p?.bedrooms as number}bd</p>
                   </div>
 
-                  {/* Metrics */}
                   <div className="flex gap-4 text-center">
                     <div>
                       <p className="text-[9px] font-mono text-dim">VALUE</p>
@@ -115,7 +115,6 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
                     </div>
                   </div>
 
-                  {/* Price sparkline */}
                   {transactions && transactions.length > 2 && (
                     <div>
                       <p className="text-[9px] font-mono text-dim mb-1">PRICE TREND</p>
@@ -127,8 +126,7 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
                     </div>
                   )}
 
-                  {/* Remove */}
-                  <button onClick={() => onRemove(uprn)}
+                  <button onClick={(e) => { e.stopPropagation(); onRemove(uprn) }}
                     className="text-dim hover:text-danger text-xs border border-border rounded-lg px-2.5 py-1.5 transition-colors">
                     ✕
                   </button>
@@ -137,7 +135,6 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
             )
           })}
 
-          {/* Summary insight */}
           <div className="card p-4 bg-accent/5 border-accent/20 mt-4">
             <p className="text-xs text-accent font-semibold mb-1">📊 Portfolio Summary</p>
             <p className="text-xs text-mid">
