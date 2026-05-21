@@ -92,12 +92,17 @@ export async function GET(req: NextRequest) {
         uprn,
         propRecord,
         cityData,
+        cityName,
         process.env.HOMEDATA_API_KEY!
       )
 
-      const grossYield = price ? calcGrossYield(price, estimatedRent) : 0
-      const netYield = price ? calcNetYield(
-        price, estimatedRent,
+      // Use valuation fair value as the effective price basis for yield calculations
+      // when last_sold_price is unavailable — gives a meaningful estimate rather than 0
+      const effectivePrice = price || valuation.fairValue
+
+      const grossYield = effectivePrice ? calcGrossYield(effectivePrice, estimatedRent) : 0
+      const netYield = effectivePrice ? calcNetYield(
+        effectivePrice, estimatedRent,
         defaults.serviceCharge, defaults.groundRent,
         defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
       ) : 0
@@ -125,8 +130,8 @@ export async function GET(req: NextRequest) {
           valuationCompsUsed: valuation.compsUsed,
           grossYield,
           netYield,
-          netMonthly: price ? calcNetMonthlyIncome(
-            price, estimatedRent,
+          netMonthly: effectivePrice ? calcNetMonthlyIncome(
+            effectivePrice, estimatedRent,
             defaults.serviceCharge, defaults.groundRent,
             defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
           ) : 0,
@@ -299,6 +304,7 @@ async function calcComparableValuation(
   _uprn: string,
   prop: Record<string, unknown>,
   cityData: Record<string, number>,
+  cityName: string,
   apiKey: string
 ): Promise<ValuationResult> {
 
@@ -314,13 +320,22 @@ async function calcComparableValuation(
 
   // ── FALLBACK: city growth-rate method ────────────────────────────────────────
   const fallback = (): ValuationResult => {
-    const price = Number(prop.last_sold_price || 0)
-    if (!price) return { fairValue: 0, lowValue: 0, highValue: 0, confidence: 0, compsUsed: 0, method: 'none' }
-    const soldYear  = Number(String(prop.last_sold_date || '2015').slice(0, 4))
-    const yearsHeld = Math.max(0, 2026 - soldYear)
-    const annualRate = Math.max(0.01, Math.min(0.08, (cityData.capitalGrowth5yr / 5) / 100))
-    const fair = Math.round(price * Math.pow(1 + annualRate, yearsHeld))
-    return { fairValue: fair, lowValue: Math.round(fair * 0.95), highValue: Math.round(fair * 1.05), confidence: 45, compsUsed: 0, method: 'growth_rate_fallback' }
+    const soldPrice = Number(prop.last_sold_price || 0)
+    if (soldPrice) {
+      const soldYear  = Number(String(prop.last_sold_date || '2015').slice(0, 4))
+      const yearsHeld = Math.max(0, 2026 - soldYear)
+      const annualRate = Math.max(0.01, (cityData.capitalGrowth5yr / 5) / 100)
+      const fair = Math.round(soldPrice * Math.pow(1 + annualRate, yearsHeld))
+      return { fairValue: fair, lowValue: Math.round(fair * 0.95), highValue: Math.round(fair * 1.05), confidence: 45, compsUsed: 0, method: 'growth_rate_fallback' }
+    }
+    // No sold history — use city avg price for the bed count as best estimate
+    const beds = Number(prop.bedrooms || 2)
+    const cityByBed = MARKET_DATA.cityByBedroom[cityName as keyof typeof MARKET_DATA.cityByBedroom]
+    const bedKey = beds === 0 ? 'studio' : beds === 1 ? '1bed' : beds === 2 ? '2bed' : beds === 3 ? '3bed' : '4bed'
+    const bedData = cityByBed?.[bedKey as keyof typeof cityByBed]
+    const fair = bedData?.avgPrice || cityData.avgPrice as number || 0
+    if (!fair) return { fairValue: 0, lowValue: 0, highValue: 0, confidence: 0, compsUsed: 0, method: 'none' }
+    return { fairValue: fair, lowValue: Math.round(fair * 0.90), highValue: Math.round(fair * 1.10), confidence: 25, compsUsed: 0, method: 'city_avg_estimate' }
   }
 
   if (!outcode) return fallback()
