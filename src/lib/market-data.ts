@@ -9,6 +9,7 @@ export const MARKET_DATA = {
     ukAvgYield: 5.8,
     rentalGrowthForecast: 3.5,
     hpiGrowthForecast: 2.5,
+    ukHpi1yr: 1.2,
     londonHpi1yr: -3.3,
     northernCitiesHpi1yr: 4.5,
     sdltSurcharge: 5, // % additional for BTL/2nd home as of Oct 2024
