@@ -250,13 +250,16 @@ function getLrType(propertyType: string): string {
   return ''
 }
 
-function getTypicalFloorArea(propertyType: string): number {
+// Premium/discount vs the blended district average £/sqm.
+// Terraced and above command a premium over the blended average which includes
+// cheaper flats; flats trade at a discount.
+function getTypeMultiplier(propertyType: string): number {
   const t = propertyType.toLowerCase()
-  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 60
-  if (t.includes('semi')) return 88
-  if (t.includes('terrace')) return 80
-  if (t.includes('detached') && !t.includes('semi')) return 110
-  return 80
+  if (t.includes('detached') && !t.includes('semi')) return 1.35
+  if (t.includes('semi')) return 1.20
+  if (t.includes('terrace')) return 1.10
+  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 0.82
+  return 1.0
 }
 
 function estimateFloorArea(beds: number, type: string): number {
@@ -275,7 +278,9 @@ async function calcComparableValuation(
 
   const subjectArea   = Number(prop.internal_area_sqm || prop.epc_floor_area || 0)
   const subjectType   = String(prop.property_type || '').toLowerCase()
-  const subjectBeds   = Number(prop.bedrooms || 2)
+  const isFlat = subjectType.includes('flat') || subjectType.includes('maisonette') || subjectType.includes('apartment')
+  // When bedrooms unknown, default to 3 for houses (most common) and 1 for flats
+  const subjectBeds   = prop.bedrooms != null ? Number(prop.bedrooms) : (isFlat ? 1 : 3)
   const subjectTenure = String(prop.tenure || '').toLowerCase()
   const subjectEpc    = String(prop.current_energy_rating || 'D')
   const hasParking    = Boolean(prop.has_parking)
@@ -333,10 +338,14 @@ async function calcComparableValuation(
       return fallback()
     }
 
+    // Recency-weighted average: recent months count more than older ones
+    // Exponential decay with λ=0.15 — month 0 weight=1.0, month 11 weight≈0.19
     const weights = prices.map((_, i) => Math.exp(-0.15 * i))
     const totalWeight = weights.reduce((s, w) => s + w, 0)
     const weightedAvgPrice = prices.reduce((s, p, i) => s + p * weights[i], 0) / totalWeight
 
+    // Trend projection: estimate monthly momentum, project forward ~2 months
+    // for Homedata data lag. Capped at ±0.8%/month.
     const recentSlice = prices.slice(0, Math.min(3, prices.length))
     const olderSlice  = prices.slice(-Math.min(3, prices.length))
     const recentAvg = recentSlice.reduce((s, p) => s + p, 0) / recentSlice.length
@@ -347,15 +356,17 @@ async function calcComparableValuation(
     const dataLagMonths = 2
     const avgPrice = weightedAvgPrice * Math.pow(1 + monthlyGrowth, dataLagMonths)
 
-    const typicalArea = getTypicalFloorArea(subjectType)
-    const pricePerSqm = avgPrice / typicalArea
+    // Use constant 75 sqm (UK residential mean) as denominator so £/sqm
+    // reflects the true blended district average, not a type-specific subset.
+    // Type differences are then applied via the multiplier below.
+    const pricePerSqm = avgPrice / 75
 
-    const effectiveArea = Math.max(
-      subjectArea > 0 ? subjectArea : 0,
-      estimateFloorArea(subjectBeds, subjectType)
-    )
+    const effectiveArea = subjectArea > 0
+      ? subjectArea
+      : estimateFloorArea(subjectBeds, subjectType)
 
-    const baseValue = Math.round(pricePerSqm * effectiveArea)
+    const typeMultiplier = getTypeMultiplier(subjectType)
+    const baseValue = Math.round(pricePerSqm * effectiveArea * typeMultiplier)
 
     let adjustment = 1.0
     if      (subjectEpc === 'A' || subjectEpc === 'B') adjustment += 0.02
@@ -380,7 +391,7 @@ async function calcComparableValuation(
     const highValue = Math.round(adjustedValue * (1 + spread) / 1000) * 1000
     const fairValue = Math.round(adjustedValue / 1000) * 1000
 
-    console.log(`Homedata Valuation: £${fairValue.toLocaleString()} (${prices.length} periods, ${confidence}% conf, £${Math.round(pricePerSqm)}/sqm, area ${effectiveArea}sqm, weighted avg £${Math.round(weightedAvgPrice).toLocaleString()}, momentum ${(monthlyGrowth * 100).toFixed(2)}%/mo, projected avg £${Math.round(avgPrice).toLocaleString()})`)
+    console.log(`Homedata Valuation: £${fairValue.toLocaleString()} (${prices.length} periods, ${confidence}% conf, £${Math.round(pricePerSqm)}/sqm, area ${effectiveArea}sqm, multiplier ${typeMultiplier}, weighted avg £${Math.round(weightedAvgPrice).toLocaleString()}, momentum ${(monthlyGrowth * 100).toFixed(2)}%/mo, projected avg £${Math.round(avgPrice).toLocaleString()})`)
 
     return { fairValue, lowValue, highValue, confidence, compsUsed: prices.length, method: 'homedata_price_trends' }
 
