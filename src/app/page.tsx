@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
 import { HeroStats } from '@/components/layout/HeroStats'
 import { PropertySearch } from '@/components/property/PropertySearch'
@@ -10,11 +10,21 @@ import { MarketIntel } from '@/components/property/MarketIntel'
 import { Portfolio } from '@/components/property/Portfolio'
 import { ROICalculator } from '@/components/property/ROICalculator'
 import { MARKET_DATA } from '@/lib/market-data'
+import type { LiveMarketData } from '@/lib/live-market-data'
 
 export type Tab = 'search' | 'market' | 'portfolio' | 'calculator'
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>('search')
+  const [marketData, setMarketData] = useState<LiveMarketData>(MARKET_DATA)
+
+  useEffect(() => {
+    fetch('/api/market')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setMarketData(data) })
+      .catch(() => {})
+  }, [])
+
   const [selectedProperty, setSelectedProperty] = useState<Record<string, unknown> | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
   const [aiProperty, setAiProperty] = useState<Record<string, unknown> | null>(null)
@@ -37,7 +47,7 @@ export default function Home() {
     <>
       <Navbar tab={tab} setTab={setTab} onAI={() => openAI(null)} portfolioCount={portfolio.length} />
 
-      <HeroStats marketData={MARKET_DATA} />
+      <HeroStats marketData={marketData} />
 
       <main className="max-w-[1320px] mx-auto px-6 py-8">
         {tab === 'search' && (
@@ -49,7 +59,7 @@ export default function Home() {
         )}
 
         {tab === 'market' && (
-          <MarketIntel marketData={MARKET_DATA} onAI={openAI} />
+          <MarketIntel marketData={marketData} onAI={openAI} />
         )}
 
         {tab === 'portfolio' && (
@@ -63,7 +73,7 @@ export default function Home() {
         )}
 
         {tab === 'calculator' && (
-          <ROICalculator marketData={MARKET_DATA} onAI={openAI} />
+          <ROICalculator marketData={marketData} onAI={openAI} />
         )}
       </main>
 
