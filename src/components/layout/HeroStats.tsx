@@ -6,7 +6,7 @@ interface HeroStatsProps {
 
 export function HeroStats({ marketData }: HeroStatsProps) {
   const m = marketData.macro
-  const dataAsOf = (marketData.dataAsOf || 'May 2026').toUpperCase()
+  const dataAsOf = marketData.dataAsOf?.toUpperCase() || 'MAY 2026'
   const stats = [
     { label: 'UK AVG PRICE',      value: `£${m.ukAvgPrice.toLocaleString()}`, sub: '+1.2% yr/yr · ONS' },
     { label: 'BoE BASE RATE',     value: `${m.bankRate}%`, sub: 'Down from 5.25% peak', green: true },
