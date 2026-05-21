@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Stat, ScoreRing, Badge, LineChart, Divider } from '@/components/ui'
-import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, MARKET_DATA } from '@/lib/market-data'
+import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcProjection, MARKET_DATA } from '@/lib/market-data'
 
 interface PropertyDetailProps {
   data: Record<string, unknown>
@@ -11,19 +11,10 @@ interface PropertyDetailProps {
   onAddPortfolio: () => void
 }
 
-type DetailTab = 'overview' | 'financials' | 'history' | 'risks'
-
-function formatDate(dateStr: string): string {
-  if (!dateStr) return ''
-  const d = dateStr.split('T')[0]
-  const parts = d.split('-')
-  if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`
-  return dateStr
-}
+type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'projection'
 
 export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
-  const [added, setAdded] = useState(false)
   const [rent, setRent] = useState<number>(0)
   const [deposit, setDeposit] = useState(0)
   const [mortRate, setMortRate] = useState(4.8)
@@ -47,7 +38,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   const price = Number(p?.last_sold_price ?? 0)
 
   const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
-  const yearsHeld = Math.max(0, new Date().getFullYear() - soldYear)
+  const yearsHeld = Math.max(0, 2026 - soldYear)
   const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
   const estimatedCurrentValue = (enriched?.estimatedCurrentValue as number)
     || (price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0)
@@ -65,16 +56,23 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
   const epcRating = String(enriched?.epcRating || p?.current_energy_rating || '?')
+  const epcCompliant = epcRating <= 'C'
+
+  const projectionData = price && effectiveRent
+    ? calcProjection(price, effectiveRent, capitalGrowth, MARKET_DATA.macro.rentalGrowthForecast,
+        serviceCharge, groundRent, mgmtFee, maintenance, voidWks)
+    : []
 
   const tabs: Array<{ id: DetailTab; label: string }> = [
-    { id: 'overview',   label: 'Overview' },
-    { id: 'financials', label: 'Financials' },
-    { id: 'history',    label: 'History' },
-    { id: 'risks',      label: 'Risks' },
+    { id: 'overview',    label: 'Overview' },
+    { id: 'financials',  label: 'Financials' },
+    { id: 'history',     label: 'History' },
+    { id: 'risks',       label: 'Risks' },
+    { id: 'projection',  label: '10yr Projection' },
   ]
 
   return (
-    <div className="fixed inset-0 z-[60] flex">
+    <div className="fixed inset-0 z-40 flex">
       <div className="flex-1 bg-bg/80 backdrop-blur-sm" onClick={onClose} />
 
       <div className="w-full max-w-3xl bg-panel border-l border-border overflow-y-auto flex flex-col">
@@ -91,41 +89,35 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                   {String(p.postcode)}
                 </span>
               )}
-              {p?.property_type && <span className="text-xs text-mid">{String(p.property_type)}</span>}
-              {(p?.bedrooms != null && p?.bedrooms !== '') && (
+              {p?.property_type && (
+                <span className="text-xs text-mid">{String(p.property_type)}</span>
+              )}
+              {p?.bedrooms && (
                 <span className="text-xs text-mid">· {String(p.bedrooms)} bed</span>
               )}
-              {cityName && <span className="text-xs text-mid">· {cityName}</span>}
+              {p?.tenure && (
+                <span className="text-xs text-mid">· {String(p.tenure)}</span>
+              )}
+              {cityName && (
+                <span className="text-xs text-mid">· {String(cityName)}</span>
+              )}
             </div>
           </div>
-          <div className="flex gap-2 shrink-0 items-center">
+          <div className="flex gap-2 shrink-0">
             <button onClick={onAI} className="btn-primary text-xs px-3 py-2">🤖 AI</button>
-            <button
-              onClick={() => { if (!added) { onAddPortfolio(); setAdded(true) } }}
-              className={`text-xs font-bold px-4 py-2 rounded-lg transition-colors whitespace-nowrap border ${
-                added
-                  ? 'bg-accent/15 border-accent/40 text-accent cursor-default'
-                  : 'bg-gold/15 border-gold/40 text-gold hover:bg-gold/25'
-              }`}
-            >
-              {added ? '✓ Added to Portfolio' : '+ Add to Portfolio'}
-            </button>
+            <button onClick={onAddPortfolio} className="bg-gold/10 border border-gold/30 text-gold text-xs font-bold px-3 py-2 rounded-lg hover:bg-gold/20 transition-colors">+ Portfolio</button>
             <button onClick={onClose} className="btn-ghost text-xs px-3 py-2">✕</button>
           </div>
         </div>
 
-        {/* Key metrics */}
+        {/* Key metrics strip */}
         <div className="p-5 grid grid-cols-2 sm:grid-cols-5 gap-3 border-b border-border">
-          <Stat
-            label="EST. CURRENT VALUE"
+          <Stat label="EST. CURRENT VALUE"
             value={estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : 'No record'}
             tone="green"
-          />
-          <Stat
-            label="LAST SOLD PRICE"
-            value={price ? `£${price.toLocaleString()}` : 'No record'}
-            sub={p?.last_sold_date ? `Sold ${formatDate(String(p.last_sold_date))}` : undefined}
-          />
+            sub={price && p?.last_sold_date ? `Est. from ${String(p.last_sold_date).slice(0,4)} sale price` : 'Based on market growth'} />
+          <Stat label="LAST SOLD PRICE" value={price ? `£${price.toLocaleString()}` : 'No record'}
+            sub={p?.last_sold_date ? `Sold ${String(p.last_sold_date).slice(0,4)}` : undefined} />
           <Stat label="GROSS YIELD" value={grossYield ? `${grossYield}%` : 'Set rent →'}
                 tone={grossYield > 6 ? 'green' : 'neutral'}
                 sub={cityData ? `Area avg ${cityData.avgYield}%` : undefined} />
@@ -145,85 +137,68 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
           ))}
         </div>
 
+        {/* Tab content */}
         <div className="p-5 flex-1">
 
           {/* OVERVIEW */}
           {tab === 'overview' && (
             <div className="space-y-5">
-              {/* Row 1: Attributes (narrow) + City Scores (wide) */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                {/* Property attributes */}
                 <div className="card p-5">
                   <p className="stat-label mb-4">PROPERTY ATTRIBUTES</p>
-                  {[
-                    ['Type', String(p?.property_type ?? '')],
-                    ['Bedrooms', (p?.bedrooms != null && p?.bedrooms !== '') ? String(p.bedrooms) : null],
-                    ['EPC Rating', epcRating !== '?' ? epcRating : null],
-                    ['Garden', p?.has_garden === true ? 'Yes' : p?.has_garden === false ? 'No' : null],
-                    ['Floor area', p?.internal_area_sqm ? `${p.internal_area_sqm}m²` : p?.epc_floor_area ? `${p.epc_floor_area}m²` : null],
-                  ].filter(([, v]) => v !== null && v !== '').map(([k, v]) => (
-                    <div key={k as string} className="flex justify-between py-2 border-b border-border text-sm">
-                      <span className="text-mid">{k}</span>
-                      <span className={`font-medium ${k === 'EPC Rating' ? (String(v) <= 'B' ? 'text-accent' : String(v) <= 'D' ? 'text-gold' : 'text-danger') : 'text-white'}`}>
-                        {v as string}
-                      </span>
-                    </div>
-                  ))}
+                  {(() => {
+                    const floorArea = enriched?.epcFloorArea || p?.internal_area_sqm || p?.epc_floor_area
+                    const rows: [string, string, boolean][] = [
+                      ['Bedrooms',   p?.bedrooms   ? `${p.bedrooms}`  : 'Unknown',  false],
+                      ['Bathrooms',  p?.bathrooms  ? `${p.bathrooms}` : 'Unknown',  false],
+                      ['Floor Area', floorArea     ? `${floorArea}m²` : 'Unknown',  false],
+                      ['EPC Rating', epcRating !== '?' ? epcRating    : 'Unknown',
+                        epcRating !== '?' && epcRating !== 'Unknown'],
+                      ['Garden',     p?.has_garden ? 'Yes' : p?.has_garden === false ? 'No' : 'Unknown', false],
+                      ['Type',       String(p?.property_type ?? '') || 'Unknown',   false],
+                      ['Tenure',     String(p?.tenure ?? '') || 'Unknown',           false],
+                      ['Council Tax',p?.council_tax_band ? `Band ${p.council_tax_band}` : 'Unknown', false],
+                    ]
+                    return rows.map(([k, v, highlight]) => (
+                      <div key={k} className="flex justify-between py-2 border-b border-border text-sm">
+                        <span className="text-mid">{k}</span>
+                        <span className={`font-medium ${highlight ? (epcRating <= 'C' ? 'text-accent' : epcRating === 'D' ? 'text-gold' : 'text-danger') : 'text-white'}`}>{v}</span>
+                      </div>
+                    ))
+                  })()}
                 </div>
 
+                {/* City investment scores */}
                 {cityData && (
-                  <div className="card p-5 lg:col-span-2">
-                    <p className="stat-label mb-5">CITY INVESTMENT SCORES · {cityName}</p>
-                    <div className="grid grid-cols-4 gap-4">
-                      {[
-                        { score: cityData.demandScore, label: 'DEMAND', sub: 'Tenant demand' },
-                        { score: 100 - cityData.supplyScore, label: 'SUPPLY GAP', sub: 'Low supply pressure' },
-                        { score: cityData.regenerationScore, label: 'REGEN', sub: 'Regeneration index' },
-                        { score: cityData.infrastructureScore, label: 'INFRA', sub: 'Infrastructure score' },
-                      ].map(({ score, label, sub }) => (
-                        <div key={label} className="flex flex-col items-center gap-2">
-                          <ScoreRing score={score} label={label} />
-                          <p className="text-[10px] text-dim text-center">{sub}</p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-4 pt-4 border-t border-border grid grid-cols-3 gap-3 text-center">
-                      <div>
-                        <p className="text-[9px] font-mono text-dim mb-1">1YR GROWTH</p>
-                        <p className={`text-sm font-bold ${cityData.capitalGrowth1yr >= 0 ? 'text-accent' : 'text-danger'}`}>
-                          {cityData.capitalGrowth1yr > 0 ? '+' : ''}{cityData.capitalGrowth1yr}%
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-[9px] font-mono text-dim mb-1">5YR GROWTH</p>
-                        <p className="text-sm font-bold text-accent">+{cityData.capitalGrowth5yr}%</p>
-                      </div>
-                      <div>
-                        <p className="text-[9px] font-mono text-dim mb-1">AVG YIELD</p>
-                        <p className="text-sm font-bold text-accent">{cityData.avgYield}%</p>
+                  <div className="space-y-4">
+                    <div className="card p-5">
+                      <p className="stat-label mb-4">CITY INVESTMENT SCORES</p>
+                      <div className="flex justify-around">
+                        <ScoreRing score={cityData.demandScore} label="DEMAND" />
+                        <ScoreRing score={100 - cityData.supplyScore} label="SUPPLY GAP" />
+                        <ScoreRing score={cityData.regenerationScore} label="REGEN" />
+                        <ScoreRing score={cityData.infrastructureScore} label="INFRA" />
                       </div>
                     </div>
-                  </div>
+                    <CityMarketPanel
+                      cityName={cityName}
+                      cityData={cityData}
+                      propertyPrice={price}
+                      estimatedCurrentValue={estimatedCurrentValue}
+                      propertyGrossYield={grossYield}
+                      propertyNetYield={netYield}
+                      propertyRent={effectiveRent}
+                      propertyBeds={Number(p?.bedrooms ?? 2)}
+                    /></div>
                 )}
               </div>
 
-              {/* Row 2: Market Comparison full width */}
-              {cityData && (
-                <CityMarketPanel
-                  cityName={cityName}
-                  cityData={cityData}
-                  propertyPrice={price}
-                  estimatedCurrentValue={estimatedCurrentValue}
-                  propertyGrossYield={grossYield}
-                  propertyNetYield={netYield}
-                  propertyRent={effectiveRent}
-                  propertyBeds={Number(p?.bedrooms ?? 2)}
-                />
-              )}
-
+              {/* UPRN info */}
               <div className="card p-4 text-xs text-mid flex gap-4 flex-wrap">
                 <span>UPRN: <strong className="text-white">{String(p?.uprn ?? '')}</strong></span>
                 <span>Postcode: <strong className="text-white">{String(p?.postcode ?? '')}</strong></span>
-                <span>Last sold: <strong className="text-white">{formatDate(String(p?.last_sold_date ?? '')) || 'No record'}</strong></span>
+                <span>Last sold: <strong className="text-white">{String(p?.last_sold_date ?? '') || 'No record'}</strong></span>
                 {p?.last_sold_price ? <span>At: <strong className="text-white">£{Number(p.last_sold_price).toLocaleString()}</strong></span> : null}
               </div>
             </div>
@@ -358,7 +333,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                     <div className="space-y-0">
                       {transactions.map((t, i) => (
                         <div key={i} className="flex justify-between py-2.5 border-b border-border text-sm">
-                          <span className="text-mid">{formatDate(String(t.date ?? ''))}</span>
+                          <span className="text-mid">{String(t.date ?? '')}</span>
                           <span className="text-white font-semibold">£{Number(t.price ?? 0).toLocaleString()}</span>
                           <span className="text-dim text-xs">{String(t.transaction_type ?? '')}</span>
                           {i < transactions.length - 1 && (
@@ -389,22 +364,20 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
           {/* RISKS */}
           {tab === 'risks' && (
             <div className="space-y-4">
-              <div className="card p-5">
-                <p className="stat-label mb-3">EPC RATING</p>
+              <div className={`card p-5 ${!epcCompliant ? 'border-danger/30' : 'border-accent/30'}`}>
+                <p className="stat-label mb-3">EPC COMPLIANCE</p>
                 <div className="flex items-center gap-4">
                   <div className={`text-5xl font-display font-black ${
                     epcRating <= 'B' ? 'text-accent' : epcRating <= 'D' ? 'text-gold' : 'text-danger'
                   }`}>{epcRating}</div>
-                  <div className="space-y-1">
-                    <p className="text-sm text-white font-semibold">Energy Performance Certificate</p>
-                    {epc?.current_energy_efficiency && (
-                      <p className="text-xs text-mid">
-                        Score: {String(epc.current_energy_efficiency)}/100 · Potential: {String(epc?.potential_energy_efficiency ?? '?')}/100
-                      </p>
-                    )}
-                    <p className="text-xs text-mid">
-                      Last assessed: {epc?.last_epc_date ? formatDate(String(epc.last_epc_date)) : 'Unknown'}
+                  <div>
+                    <p className={`font-semibold mb-1 ${epcCompliant ? 'text-accent' : 'text-gold'}`}>
+                      {epcCompliant ? '✓ Compliant with proposed 2028 EPC-C rules' : '⚠ At risk — upgrade required before 2028'}
                     </p>
+                    <p className="text-xs text-mid">Score: {String(epc?.current_energy_efficiency ?? '?')}/100 · Potential: {String(epc?.potential_energy_efficiency ?? '?')}/100</p>
+                    <p className="text-xs text-mid">Cert date: {String(epc?.last_epc_date ?? epc?.inspection_date ?? 'Unknown')}</p>
+                    {epc?.source === 'epc_open_data' && <p className="text-xs text-dim mt-0.5">Source: EPC Open Data Register</p>}
+                    {!epcCompliant && <p className="text-xs text-danger mt-1">Estimated upgrade cost: £4,000–£12,000 depending on works needed</p>}
                   </div>
                 </div>
               </div>
@@ -434,6 +407,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                 {[
                   { risk: 'Rental void risk', note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
                   { risk: 'Capital growth risk', note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
+                  { risk: 'EPC compliance', note: epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: epcCompliant ? 'low' : 'high' },
                   { risk: 'Leasehold risk', note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
                   { risk: 'Interest rate risk', note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
                 ].map(r => (
@@ -452,12 +426,72 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
             </div>
           )}
 
+          {/* 10YR PROJECTION */}
+          {tab === 'projection' && (
+            <div className="space-y-5">
+              {projectionData.length > 0 ? (
+                <>
+                  <div className="card p-5">
+                    <p className="stat-label mb-1">10-YEAR TOTAL RETURN PROJECTION</p>
+                    <p className="text-xs text-mid mb-4">Assumes {capitalGrowth}% annual capital growth · {MARKET_DATA.macro.rentalGrowthForecast}% annual rental growth · all costs held constant</p>
+                    <LineChart
+                      series={[
+                        { name: 'Property value', data: projectionData.map(y => y.propertyValue), color: '#00d4aa' },
+                        { name: 'Cumulative cashflow', data: projectionData.map(y => y.cumulativeCashflow), color: '#f0c040' },
+                        { name: 'Total return', data: projectionData.map(y => y.totalReturn), color: '#4d9fff' },
+                      ]}
+                      labels={projectionData.map(y => String(y.year))}
+                      height={130}
+                    />
+                    <div className="flex gap-4 mt-2">
+                      {[['Property value', '#00d4aa'], ['Cumulative cashflow', '#f0c040'], ['Total return', '#4d9fff']].map(([l, c]) => (
+                        <span key={l} className="flex items-center gap-1.5 text-[10px] text-mid">
+                          <span className="w-3 h-0.5 inline-block rounded" style={{ background: c }} />{l}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-border">
+                          {['Year', 'Property value', 'Monthly rent', 'Net/month', 'Cum. cashflow', 'Total return'].map(h => (
+                            <th key={h} className="text-left py-2 px-3 font-mono text-dim">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {projectionData.map(yr => (
+                          <tr key={yr.year} className="border-b border-border hover:bg-white/5">
+                            <td className="py-2 px-3 text-mid">{yr.year}</td>
+                            <td className="py-2 px-3 text-accent font-semibold">£{yr.propertyValue.toLocaleString()}</td>
+                            <td className="py-2 px-3 text-white">£{yr.monthlyRent.toLocaleString()}</td>
+                            <td className="py-2 px-3 text-accent">£{yr.netMonthly.toLocaleString()}</td>
+                            <td className="py-2 px-3 text-gold">£{yr.cumulativeCashflow.toLocaleString()}</td>
+                            <td className="py-2 px-3 text-blue-400 font-bold">£{yr.totalReturn.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : (
+                <div className="card p-8 text-center">
+                  <p className="text-3xl mb-3">📈</p>
+                  <p className="text-white font-semibold mb-2">Set rent to generate projection</p>
+                  <p className="text-mid text-sm">Go to the Financials tab and enter an expected monthly rent to see a 10-year return model.</p>
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
       </div>
     </div>
   )
 }
 
+// ── City Market Panel ─────────────────────────────────────────────────────────
 function CityMarketPanel({
   cityName, cityData, propertyPrice, estimatedCurrentValue, propertyGrossYield, propertyNetYield, propertyRent, propertyBeds
 }: {
@@ -546,27 +580,59 @@ function CityMarketPanel({
             {BEDS.find(b => b.key === selectedBed)?.label} {selectedCity}
           </span>
         </div>
+
         {[
-          { label: 'Est. value', sublabel: estimatedCurrentValue ? '(est.)' : '(last sold)', prop: fmt(displayPrice), city: fmt(compAvgPrice), propRaw: 0, cityRaw: 0, higherIsBetter: false, isPct: false },
-          { label: 'Gross yield', sublabel: undefined, prop: pct(propertyGrossYield), city: pct(compAvgYield), propRaw: propertyGrossYield, cityRaw: compAvgYield, higherIsBetter: true, isPct: true },
-          { label: 'Net yield', sublabel: undefined, prop: pct(propertyNetYield), city: '—', propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false },
-          { label: 'Monthly rent', sublabel: undefined, prop: propertyRent ? `£${propertyRent.toLocaleString()}` : 'Set rent', city: fmt(compAvgRent), propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false },
-          { label: '1yr growth', sublabel: undefined, prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false },
-          { label: '5yr growth', sublabel: undefined, prop: `+${cityAvg.capitalGrowth5yr}%`, city: `+${cityAvg.capitalGrowth5yr}%`, propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false },
+          {
+            label: 'Est. value', sublabel: estimatedCurrentValue ? '(est.)' : '(last sold)',
+            prop: fmt(displayPrice), city: fmt(compAvgPrice),
+            propRaw: 0, cityRaw: 0, higherIsBetter: false, isPct: false,
+          },
+          {
+            label: 'Gross yield', sublabel: undefined,
+            prop: pct(propertyGrossYield), city: pct(compAvgYield),
+            propRaw: propertyGrossYield, cityRaw: compAvgYield,
+            higherIsBetter: true, isPct: true,
+          },
+          {
+            label: 'Net yield', sublabel: undefined,
+            prop: pct(propertyNetYield), city: '—',
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
+          },
+          {
+            label: 'Monthly rent', sublabel: undefined,
+            prop: propertyRent ? `£${propertyRent.toLocaleString()}` : 'Set rent',
+            city: fmt(compAvgRent),
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
+          },
+          {
+            label: '1yr growth', sublabel: undefined,
+            prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`,
+            city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`,
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
+          },
+          {
+            label: '5yr growth', sublabel: undefined,
+            prop: `+${cityAvg.capitalGrowth5yr}%`,
+            city: `+${cityAvg.capitalGrowth5yr}%`,
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
+          },
         ].map((row, i) => (
-          <div key={row.label} className={`grid grid-cols-3 px-3 py-2.5 border-b border-border last:border-0 ${i % 2 === 0 ? '' : 'bg-white/[0.02]'}`}>
+          <div key={row.label}
+            className={`grid grid-cols-3 px-3 py-2.5 border-b border-border last:border-0 ${i % 2 === 0 ? '' : 'bg-white/[0.02]'}`}>
             <div>
               <span className="text-mid text-xs">{row.label}</span>
               {row.sublabel && <span className="text-[9px] text-dim ml-1">{row.sublabel}</span>}
             </div>
             <span className="text-accent font-semibold text-center text-xs">
               {row.prop}
-              {row.isPct && row.propRaw && row.cityRaw ? diff(row.propRaw, row.cityRaw, row.higherIsBetter) : null}
+              {row.isPct && row.propRaw && row.cityRaw
+                ? diff(row.propRaw, row.cityRaw, row.higherIsBetter) : null}
             </span>
             <span className="text-white text-right text-xs">{row.city}</span>
           </div>
         ))}
       </div>
+
       <p className="text-[10px] text-dim mt-3">
         {bedroomData
           ? `${BEDS.find(b => b.key === selectedBed)?.label} avg for ${selectedCity} · Zoopla 2026 · REalyse`
