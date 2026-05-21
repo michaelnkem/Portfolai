@@ -11,7 +11,7 @@ const CITY_COLORS: Record<string, string> = {
 }
 
 interface MarketIntelProps {
-  marketData: typeof MARKET_DATA
+  marketData: typeof MARKET_DATA & { dataAsOf?: string }
   onAI: (p: null) => void
 }
 
@@ -39,14 +39,9 @@ export function MarketIntel({ marketData, onAI }: MarketIntelProps) {
         eyebrow="LIVE MARKET INTELLIGENCE"
         title="UK City Investment Analysis"
         action={
-          <div className="flex items-center gap-3">
-            <span className="text-[10px] font-mono text-dim">
-              avgPrice &amp; 1yr growth live · {marketData.dataAsOf}
-            </span>
-            <button onClick={() => onAI(null)} className="btn-primary text-sm">
-              🤖 Market Q&A
-            </button>
-          </div>
+          <button onClick={() => onAI(null)} className="btn-primary text-sm">
+            🤖 Market Q&A
+          </button>
         }
       />
 
@@ -70,6 +65,7 @@ export function MarketIntel({ marketData, onAI }: MarketIntelProps) {
       </div>
 
       {/* City score cards */}
+      <p className="text-[9px] font-mono text-dim mb-2 tracking-wide">AVG PRICE &amp; 1YR GROWTH LIVE · {(marketData.dataAsOf || 'May 2026').toUpperCase()}</p>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         {selected.map(c => {
           const d = marketData.cities[c as keyof typeof marketData.cities]
@@ -172,7 +168,7 @@ export function MarketIntel({ marketData, onAI }: MarketIntelProps) {
 
       {/* Macro panel */}
       <div className="card p-5">
-        <p className="stat-label mb-4">UK MACRO ENVIRONMENT · MAY 2026</p>
+        <p className="stat-label mb-4">UK MACRO ENVIRONMENT · {(marketData.dataAsOf || 'May 2026').toUpperCase()}</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
             { label: 'BoE RATE', value: `${marketData.macro.bankRate}%`, sub: 'Down from 5.25%', tone: 'green' as const },
