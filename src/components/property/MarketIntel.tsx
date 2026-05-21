@@ -39,9 +39,14 @@ export function MarketIntel({ marketData, onAI }: MarketIntelProps) {
         eyebrow="LIVE MARKET INTELLIGENCE"
         title="UK City Investment Analysis"
         action={
-          <button onClick={() => onAI(null)} className="btn-primary text-sm">
-            🤖 Market Q&A
-          </button>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] font-mono text-dim">
+              avgPrice &amp; 1yr growth live · {marketData.dataAsOf}
+            </span>
+            <button onClick={() => onAI(null)} className="btn-primary text-sm">
+              🤖 Market Q&A
+            </button>
+          </div>
         }
       />
 
