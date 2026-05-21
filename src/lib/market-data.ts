@@ -2,18 +2,17 @@
 // Sources: ONS HPI Feb 2026, Zoopla HPI April 2026, REalyse, Land Registry, BoE
 
 export const MARKET_DATA = {
-  dataAsOf: 'May 2026',
-    macro: {
+  macro: {
     bankRate: 4.0,
     inflation: 3.4,
     ukAvgPrice: 267957,
     ukAvgYield: 5.8,
     rentalGrowthForecast: 3.5,
     hpiGrowthForecast: 2.5,
-    ukHpi1yr: 1.2,        // ← ADD THIS LINE
+    ukHpi1yr: 1.2,
     londonHpi1yr: -3.3,
     northernCitiesHpi1yr: 4.5,
-    sdltSurcharge: 5,
+    sdltSurcharge: 5, // % additional for BTL/2nd home as of Oct 2024
   },
   cities: {
     Manchester: {
@@ -126,12 +125,12 @@ export const MARKET_DATA = {
       '3bed':  { avgPrice: 470000, avgRent: 2200, avgYield: 5.6 },
       '4bed':  { avgPrice: 580000, avgRent: 2800, avgYield: 5.8 },
     },
-        London: {
-      studio: { avgPrice: 290000, avgRent: 1600, avgYield: 6.6 },
-      '1bed':  { avgPrice: 390000, avgRent: 2000, avgYield: 6.2 },
-      '2bed':  { avgPrice: 510000, avgRent: 2600, avgYield: 6.1 },
-      '3bed':  { avgPrice: 630000, avgRent: 3200, avgYield: 6.1 },
-      '4bed':  { avgPrice: 780000, avgRent: 4000, avgYield: 6.2 },
+    London: {
+      studio: { avgPrice: 320000, avgRent: 1800, avgYield: 6.8 },
+      '1bed':  { avgPrice: 430000, avgRent: 2200, avgYield: 6.1 },
+      '2bed':  { avgPrice: 590000, avgRent: 2850, avgYield: 5.8 },
+      '3bed':  { avgPrice: 780000, avgRent: 3500, avgYield: 5.4 },
+      '4bed':  { avgPrice: 1100000, avgRent: 4800, avgYield: 5.2 },
     },
   },
   // ONS HPI index values (base 100 = Jan 2016) — sampled bi-annually
