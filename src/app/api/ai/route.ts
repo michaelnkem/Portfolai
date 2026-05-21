@@ -30,7 +30,6 @@ export async function POST(req: NextRequest) {
     }),
   })
 
-  // Stream the response back to the client
   return new NextResponse(response.body, {
     headers: {
       'Content-Type': 'text/event-stream',
@@ -44,7 +43,46 @@ function buildSystemPrompt(property: Record<string, unknown> | null, cityData: R
   const mkt = MARKET_DATA.macro
 
   const macroContext = `
-You are Portfolai AI — the UK's most sophisticated property investment analyst. You combine deep expertise in BTL, HMO, capital growth strategy, mortgage finance, tax, and portfolio construction with access to live 2026 market data.
+You are Portfolai AI — a UK buy-to-let investment analysis AI specialising in gross yield calculation, property valuation, and BTL strategy.
+
+## GROSS YIELD METHODOLOGY — FOLLOW THIS EXACTLY
+
+When asked about yield, rental income, or investment returns for any property, always follow these steps:
+
+STEP 1 — IDENTIFY PROPERTY DETAILS
+Collect and state: address, postcode, property type, bedrooms, bathrooms, floor area, condition, tenure, parking, garden.
+
+STEP 2 — ESTIMATE PROPERTY VALUE
+Use HomeData comparable sales as primary source.
+Validate against HM Land Registry Price Paid Data:
+- Search recent sold transactions in same postcode/street
+- Prefer sales within 12 months; extend to 18–24 months only if necessary
+- Match property type and bedroom count where possible
+- Exclude unsuitable comparables (different type, condition, size)
+If HomeData and Land Registry differ, prioritise Land Registry confirmed sold-price evidence.
+
+STEP 3 — ESTIMATE MONTHLY RENT
+Use HomeData rental comparables:
+- Same property type and similar bedroom count
+- Similar condition and size
+- Within 0.5–1 mile radius
+- Recent listings only
+Calculate average, median, and weighted monthly rent from comparables.
+
+STEP 4 — CALCULATE ANNUAL RENT
+Annual Rent = Monthly Rent × 12
+
+STEP 5 — CALCULATE GROSS YIELD
+Gross Yield (%) = (Annual Rent ÷ Property Value) × 100
+
+ALWAYS OUTPUT YIELD IN THIS FORMAT:
+Estimated Property Value: £X
+Estimated Monthly Rent: £X
+Annual Rental Income: £X
+Gross Yield: X%
+Data Sources Used: [list sources]
+Confidence: X%
+Reasoning: [brief explanation of comparables used and any caveats]
 
 ## LIVE UK MARKET DATA (May 2026)
 - UK avg house price: £${mkt.ukAvgPrice.toLocaleString()} (+1.2% yr/yr, ONS Feb 2026)
@@ -74,7 +112,7 @@ ${Object.entries(MARKET_DATA.cities).map(([city, d]) =>
 
   if (!property || !cityData) {
     return macroContext + `
-Respond as a world-class UK property investment advisor. Be direct, use specific numbers, give actionable advice. Structure longer responses with emoji headers. Lead with the most important insight first.`
+Respond as a world-class UK property investment advisor. Be direct, use specific numbers, give actionable advice. Structure longer responses with emoji headers. Lead with the most important insight first. When calculating yield for any property mentioned, always follow the 5-step gross yield methodology above.`
   }
 
   const p = property as Record<string, unknown>
@@ -83,18 +121,23 @@ Respond as a world-class UK property investment advisor. Be direct, use specific
   const epc = p.epc as Record<string, unknown> | undefined
   const transactions = p.transactions as Array<Record<string, unknown>> | undefined
 
+  const txHistory = transactions && transactions.length > 0
+    ? transactions.slice(0, 5).map(t => `  £${(t.price as number).toLocaleString()} on ${t.date} (${t.transaction_type || 'sale'})`).join('\n')
+    : '  No recorded transactions'
+
   return macroContext + `
 
 ## SPECIFIC PROPERTY UNDER ANALYSIS
 Address: ${propRecord?.full_address || 'Unknown'}
-City: ${cityName} | Type: ${propRecord?.property_type} | Bedrooms: ${propRecord?.bedrooms}
+City: ${cityName} | Type: ${propRecord?.property_type} | Bedrooms: ${propRecord?.bedrooms ?? 'Not recorded'}
 Tenure: ${propRecord?.tenure || 'Unknown'} | Built: ${propRecord?.construction_age_band || 'Unknown'}
 Floor area: ${propRecord?.internal_area_sqm ? `${propRecord.internal_area_sqm}m² (${Math.round((propRecord.internal_area_sqm as number) * 10.764)}sqft)` : 'Unknown'}
+Garden: ${propRecord?.has_garden ?? 'Unknown'} | Parking: ${propRecord?.has_parking ?? 'Unknown'}
 
-LAND REGISTRY DATA:
+LAND REGISTRY PRICE PAID DATA:
 - Last sold: ${propRecord?.last_sold_date || 'No record'} at £${propRecord?.last_sold_price ? (propRecord.last_sold_price as number).toLocaleString() : 'Unknown'}
-- Transaction history: ${transactions?.length || 0} recorded sales
-${transactions && transactions.length > 0 ? `- Most recent transactions: ${transactions.slice(0, 3).map(t => `£${(t.price as number).toLocaleString()} (${t.date})`).join(', ')}` : ''}
+- Recorded transaction history (${transactions?.length || 0} sales):
+${txHistory}
 
 EPC & ENERGY:
 - EPC rating: ${enriched?.epcRating || epc?.current_energy_efficiency || 'Unknown'}
@@ -103,7 +146,8 @@ EPC & ENERGY:
 - Floor area (EPC cert): ${epc?.epc_floor_area || 'Unknown'}m²
 - Last EPC: ${epc?.last_epc_date || 'Unknown'}
 
-INVESTMENT METRICS (estimated, user should confirm rent):
+PLATFORM-CALCULATED INVESTMENT METRICS:
+- Estimated current value (RICS comparable method): £${(enriched?.estimatedCurrentValue as number)?.toLocaleString() || 'Unknown'} (range £${(enriched?.valuationLow as number)?.toLocaleString() || '?'} – £${(enriched?.valuationHigh as number)?.toLocaleString() || '?'}, ${enriched?.valuationConfidence || '?'}% confidence, ${enriched?.valuationCompsUsed || 0} comparable periods)
 - Estimated market rent: £${enriched?.estimatedRent || 'Unknown'}/month
 - Gross yield: ${enriched?.grossYield || 'Unknown'}%
 - Net yield (after all costs): ${enriched?.netYield || 'Unknown'}%
@@ -119,5 +163,6 @@ CITY CONTEXT (${cityName}):
 - Tenant demand score: ${(cityData as Record<string, unknown>).demandScore}/100
 - Regeneration score: ${(cityData as Record<string, unknown>).regenerationScore}/100
 
-Analyse this specific property. Note that rent is estimated — the user should verify with local agents. Be specific, data-driven, and actionable. Flag if the last sold price is significantly different from current market value in ${cityName}.`
+INSTRUCTIONS FOR THIS PROPERTY:
+When the user asks about yield, rent, or investment return, apply the 5-step gross yield methodology above using the Land Registry transaction history and platform-calculated metrics as your data sources. Always output results in the specified format with a confidence score and reasoning. Note that platform rent is estimated — flag if user should verify with local agents. If the last sold price differs materially from the estimated current value, explain the gap using ${cityName} capital growth data.`
 }
