@@ -7,9 +7,10 @@ interface PortfolioProps {
   portfolio: Record<string, unknown>[]
   onRemove: (uprn: string) => void
   onAI: (p: null) => void
+  onSelectProperty: (data: Record<string, unknown>) => void
 }
 
-export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
+export function Portfolio({ portfolio, onRemove, onAI, onSelectProperty }: PortfolioProps) {
   const totalValue = portfolio.reduce((s, item) => {
     const p = item.property as Record<string, unknown>
     return s + ((p?.last_sold_price as number) || 0)
@@ -81,7 +82,8 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
             const cityName = item.cityName as string
 
             return (
-              <div key={i} className="card p-4 hover:border-mid transition-colors">
+              <div key={i} className="card p-4 hover:border-mid transition-colors cursor-pointer"
+                onClick={() => onSelectProperty(item)}>
                 <div className="flex items-center gap-4 flex-wrap">
                   {/* Address */}
                   <div className="flex-1 min-w-[200px]">
@@ -128,7 +130,7 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
                   )}
 
                   {/* Remove */}
-                  <button onClick={() => onRemove(uprn)}
+                  <button onClick={(e) => { e.stopPropagation(); onRemove(uprn) }}
                     className="text-dim hover:text-danger text-xs border border-border rounded-lg px-2.5 py-1.5 transition-colors">
                     ✕
                   </button>
