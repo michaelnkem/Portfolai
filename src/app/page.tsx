@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
 import { HeroStats } from '@/components/layout/HeroStats'
 import { PropertySearch } from '@/components/property/PropertySearch'
@@ -10,7 +10,6 @@ import { MarketIntel } from '@/components/property/MarketIntel'
 import { Portfolio } from '@/components/property/Portfolio'
 import { ROICalculator } from '@/components/property/ROICalculator'
 import { MARKET_DATA } from '@/lib/market-data'
-import type { LiveMarketData } from '@/lib/live-market-data'
 
 export type Tab = 'search' | 'market' | 'portfolio' | 'calculator'
 
@@ -20,14 +19,6 @@ export default function Home() {
   const [aiOpen, setAiOpen] = useState(false)
   const [aiProperty, setAiProperty] = useState<Record<string, unknown> | null>(null)
   const [portfolio, setPortfolio] = useState<Array<Record<string, unknown>>>([])
-  const [marketData, setMarketData] = useState<LiveMarketData>(MARKET_DATA as LiveMarketData)
-
-  useEffect(() => {
-    fetch('/api/market')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setMarketData(data) })
-      .catch(() => {})
-  }, [])
 
   const openAI = useCallback((property: Record<string, unknown> | null = null) => {
     setAiProperty(property)
@@ -46,7 +37,11 @@ export default function Home() {
     <>
       <Navbar tab={tab} setTab={setTab} onAI={() => openAI(null)} portfolioCount={portfolio.length} />
 
-      <HeroStats marketData={marketData} />
+      <div className={`transition-all duration-300 ${selectedProperty ? 'group relative' : ''}`}>
+        <div className={selectedProperty ? 'opacity-0 group-hover:opacity-100 transition-opacity duration-200' : ''}>
+          <HeroStats marketData={MARKET_DATA} />
+        </div>
+      </div>
 
       <main className="max-w-[1320px] mx-auto px-6 py-8">
         {tab === 'search' && (
@@ -58,7 +53,7 @@ export default function Home() {
         )}
 
         {tab === 'market' && (
-          <MarketIntel marketData={marketData} onAI={openAI} />
+          <MarketIntel marketData={MARKET_DATA} onAI={openAI} />
         )}
 
         {tab === 'portfolio' && (
@@ -68,11 +63,12 @@ export default function Home() {
               (p.property as Record<string, unknown>)?.uprn !== uprn
             ))}
             onAI={openAI}
+            onSelectProperty={setSelectedProperty}
           />
         )}
 
         {tab === 'calculator' && (
-          <ROICalculator marketData={marketData} onAI={openAI} />
+          <ROICalculator marketData={MARKET_DATA} onAI={openAI} />
         )}
       </main>
 
