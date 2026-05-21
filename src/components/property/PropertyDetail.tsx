@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Stat, ScoreRing, Badge, LineChart, Divider } from '@/components/ui'
-import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcProjection, MARKET_DATA } from '@/lib/market-data'
+import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, MARKET_DATA } from '@/lib/market-data'
 
 interface PropertyDetailProps {
   data: Record<string, unknown>
@@ -11,7 +11,15 @@ interface PropertyDetailProps {
   onAddPortfolio: () => void
 }
 
-type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'projection'
+type DetailTab = 'overview' | 'financials' | 'history' | 'risks'
+
+function formatDate(dateStr: string): string {
+  if (!dateStr) return ''
+  const d = dateStr.split('T')[0]
+  const parts = d.split('-')
+  if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`
+  return dateStr
+}
 
 export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
@@ -34,19 +42,15 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   const cityName = data.cityName as string
   const cityData = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
 
-  // Use user-set rent or fall back to estimate
   const effectiveRent = rentSet ? rent : (enriched?.estimatedRent as number || 0)
   const price = Number(p?.last_sold_price ?? 0)
 
-  // Estimated current value — prefer API-calculated (uses district price trends)
-  // Fall back to client-side calculation if not provided
   const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
-  const yearsHeld = Math.max(0, 2026 - soldYear)
+  const yearsHeld = Math.max(0, new Date().getFullYear() - soldYear)
   const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
   const estimatedCurrentValue = (enriched?.estimatedCurrentValue as number)
     || (price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0)
 
-  // Live-calculated metrics
   const grossYield = price && effectiveRent ? parseFloat(((effectiveRent * 12 / price) * 100).toFixed(2)) : 0
   const netYield = price && effectiveRent ? parseFloat((
     calcNetMonthlyIncome(price, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks)
@@ -59,30 +63,19 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
   const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
-  // EPC rating
   const epcRating = String(enriched?.epcRating || p?.current_energy_rating || '?')
-  const epcCompliant = epcRating <= 'C'
-
-  // Projection data
-  const projectionData = price && effectiveRent
-    ? calcProjection(price, effectiveRent, capitalGrowth, MARKET_DATA.macro.rentalGrowthForecast,
-        serviceCharge, groundRent, mgmtFee, maintenance, voidWks)
-    : []
 
   const tabs: Array<{ id: DetailTab; label: string }> = [
-    { id: 'overview',    label: 'Overview' },
-    { id: 'financials',  label: 'Financials' },
-    { id: 'history',     label: 'History' },
-    { id: 'risks',       label: 'Risks' },
-    { id: 'projection',  label: '10yr Projection' },
+    { id: 'overview',   label: 'Overview' },
+    { id: 'financials', label: 'Financials' },
+    { id: 'history',    label: 'History' },
+    { id: 'risks',      label: 'Risks' },
   ]
 
   return (
-    <div className="fixed inset-0 z-40 flex">
-      {/* Backdrop */}
+    <div className="fixed inset-0 z-[60] flex">
       <div className="flex-1 bg-bg/80 backdrop-blur-sm" onClick={onClose} />
 
-      {/* Panel */}
       <div className="w-full max-w-3xl bg-panel border-l border-border overflow-y-auto flex flex-col">
         {/* Header */}
         <div className="sticky top-0 z-10 bg-panel border-b border-border p-5 flex items-start justify-between gap-4">
@@ -100,32 +93,38 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
               {p?.property_type && (
                 <span className="text-xs text-mid">{String(p.property_type)}</span>
               )}
-              {p?.bedrooms && (
+              {(p?.bedrooms != null && p?.bedrooms !== '') && (
                 <span className="text-xs text-mid">· {String(p.bedrooms)} bed</span>
-              )}
-              {p?.tenure && (
-                <span className="text-xs text-mid">· {String(p.tenure)}</span>
               )}
               {cityName && (
                 <span className="text-xs text-mid">· {String(cityName)}</span>
               )}
             </div>
           </div>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-2 shrink-0 items-center">
             <button onClick={onAI} className="btn-primary text-xs px-3 py-2">🤖 AI</button>
-            <button onClick={onAddPortfolio} className="bg-gold/10 border border-gold/30 text-gold text-xs font-bold px-3 py-2 rounded-lg hover:bg-gold/20 transition-colors">+ Portfolio</button>
+            <button
+              onClick={onAddPortfolio}
+              className="bg-gold/15 border border-gold/40 text-gold text-xs font-bold px-4 py-2 rounded-lg hover:bg-gold/25 transition-colors whitespace-nowrap"
+            >
+              + Add to Portfolio
+            </button>
             <button onClick={onClose} className="btn-ghost text-xs px-3 py-2">✕</button>
           </div>
         </div>
 
-        {/* Key metrics strip */}
+        {/* Key metrics */}
         <div className="p-5 grid grid-cols-2 sm:grid-cols-5 gap-3 border-b border-border">
-          <Stat label="EST. CURRENT VALUE"
+          <Stat
+            label="EST. CURRENT VALUE"
             value={estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : 'No record'}
             tone="green"
-            sub={price && p?.last_sold_date ? `Est. from ${String(p.last_sold_date).slice(0,4)} sale price` : 'Based on market growth'} />
-          <Stat label="LAST SOLD PRICE" value={price ? `£${price.toLocaleString()}` : 'No record'}
-            sub={p?.last_sold_date ? `Sold ${String(p.last_sold_date).slice(0,4)}` : undefined} />
+          />
+          <Stat
+            label="LAST SOLD PRICE"
+            value={price ? `£${price.toLocaleString()}` : 'No record'}
+            sub={p?.last_sold_date ? `Sold ${formatDate(String(p.last_sold_date))}` : undefined}
+          />
           <Stat label="GROSS YIELD" value={grossYield ? `${grossYield}%` : 'Set rent →'}
                 tone={grossYield > 6 ? 'green' : 'neutral'}
                 sub={cityData ? `Area avg ${cityData.avgYield}%` : undefined} />
@@ -145,26 +144,19 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
           ))}
         </div>
 
-        {/* Tab content */}
         <div className="p-5 flex-1">
 
           {/* OVERVIEW */}
           {tab === 'overview' && (
             <div className="space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                {/* Property attributes */}
                 <div className="card p-5">
                   <p className="stat-label mb-4">PROPERTY ATTRIBUTES</p>
                   {[
                     ['Type', String(p?.property_type ?? '')],
-                    ['Built', String(p?.construction_age_band ?? '')],
-                    ['Bedrooms', String(p?.bedrooms ?? '')],
-                    ['Floor area', p?.internal_area_sqm ? `${p.internal_area_sqm}m²` : p?.epc_floor_area ? `${p.epc_floor_area}m²` : 'Unknown'],
-                    ['Tenure', String(p?.tenure ?? '')],
-                    ['Council Tax', p?.council_tax_band ? `Band ${p.council_tax_band}` : 'Unknown'],
-                    ['Garden', p?.has_garden ? 'Yes' : p?.has_garden === false ? 'No' : 'Unknown'],
-                    ['Parking', p?.has_parking ? 'Yes' : p?.has_parking === false ? 'No' : 'Unknown'],
-                  ].filter(([,v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => (
+                    ['Bedrooms', (p?.bedrooms != null && p?.bedrooms !== '') ? String(p.bedrooms) : null],
+                    ['Floor area', p?.internal_area_sqm ? `${p.internal_area_sqm}m²` : p?.epc_floor_area ? `${p.epc_floor_area}m²` : null],
+                  ].filter(([, v]) => v !== null && v !== '').map(([k, v]) => (
                     <div key={k as string} className="flex justify-between py-2 border-b border-border text-sm">
                       <span className="text-mid">{k}</span>
                       <span className="text-white font-medium">{v as string}</span>
@@ -172,7 +164,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                   ))}
                 </div>
 
-                {/* City investment scores */}
                 {cityData && (
                   <div className="space-y-4">
                     <div className="card p-5">
@@ -193,15 +184,15 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                       propertyNetYield={netYield}
                       propertyRent={effectiveRent}
                       propertyBeds={Number(p?.bedrooms ?? 2)}
-                    /></div>
+                    />
+                  </div>
                 )}
               </div>
 
-              {/* UPRN info */}
               <div className="card p-4 text-xs text-mid flex gap-4 flex-wrap">
                 <span>UPRN: <strong className="text-white">{String(p?.uprn ?? '')}</strong></span>
                 <span>Postcode: <strong className="text-white">{String(p?.postcode ?? '')}</strong></span>
-                <span>Last sold: <strong className="text-white">{String(p?.last_sold_date ?? '') || 'No record'}</strong></span>
+                <span>Last sold: <strong className="text-white">{formatDate(String(p?.last_sold_date ?? '')) || 'No record'}</strong></span>
                 {p?.last_sold_price ? <span>At: <strong className="text-white">£{Number(p.last_sold_price).toLocaleString()}</strong></span> : null}
               </div>
             </div>
@@ -210,7 +201,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
           {/* FINANCIALS */}
           {tab === 'financials' && (
             <div className="space-y-5">
-              {/* Rent input */}
               <div className="card p-5 border-accent/30">
                 <p className="stat-label mb-3">ENTER MONTHLY RENT (£)</p>
                 <div className="flex gap-3 items-center">
@@ -235,7 +225,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                 </p>
               </div>
 
-              {/* Cost assumptions */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="card p-4 space-y-3">
                   <p className="stat-label">ANNUAL COSTS</p>
@@ -269,7 +258,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                   ))}
                 </div>
 
-                {/* P&L */}
                 <div className="card p-4">
                   <p className="stat-label mb-3">ANNUAL P&L</p>
                   {[
@@ -291,7 +279,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                 </div>
               </div>
 
-              {/* Mortgage modeller */}
               <div className="card p-5">
                 <p className="stat-label mb-4">MORTGAGE CASHFLOW MODELLER</p>
                 <div className="grid grid-cols-3 gap-4 mb-4">
@@ -316,7 +303,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                         tone={cashflow >= 0 ? 'green' : 'red'}
                         sub={cashflow >= 0 ? 'Positive ✓' : 'Negative ⚠'} />
                 </div>
-                {price && <p className="text-xs text-mid mt-3">SDLT (additional property): <strong className="text-white">£{sdlt.toLocaleString()}</strong> · Total acquisition cost: <strong className="text-white">£{(price + sdlt + (deposit ? 0 : 0)).toLocaleString()}</strong></p>}
+                {price && <p className="text-xs text-mid mt-3">SDLT (additional property): <strong className="text-white">£{sdlt.toLocaleString()}</strong> · Total acquisition cost: <strong className="text-white">£{(price + sdlt).toLocaleString()}</strong></p>}
               </div>
             </div>
           )}
@@ -340,7 +327,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                     <div className="space-y-0">
                       {transactions.map((t, i) => (
                         <div key={i} className="flex justify-between py-2.5 border-b border-border text-sm">
-                          <span className="text-mid">{String(t.date ?? '')}</span>
+                          <span className="text-mid">{formatDate(String(t.date ?? ''))}</span>
                           <span className="text-white font-semibold">£{Number(t.price ?? 0).toLocaleString()}</span>
                           <span className="text-dim text-xs">{String(t.transaction_type ?? '')}</span>
                           {i < transactions.length - 1 && (
@@ -371,25 +358,26 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
           {/* RISKS */}
           {tab === 'risks' && (
             <div className="space-y-4">
-              {/* EPC */}
-              <div className={`card p-5 ${!epcCompliant ? 'border-danger/30' : 'border-accent/30'}`}>
-                <p className="stat-label mb-3">EPC COMPLIANCE</p>
+              <div className="card p-5">
+                <p className="stat-label mb-3">EPC RATING</p>
                 <div className="flex items-center gap-4">
                   <div className={`text-5xl font-display font-black ${
                     epcRating <= 'B' ? 'text-accent' : epcRating <= 'D' ? 'text-gold' : 'text-danger'
                   }`}>{epcRating}</div>
-                  <div>
-                    <p className={`font-semibold mb-1 ${epcCompliant ? 'text-accent' : 'text-gold'}`}>
-                      {epcCompliant ? '✓ Compliant with proposed 2028 EPC-C rules' : '⚠ At risk — upgrade required before 2028'}
+                  <div className="space-y-1">
+                    <p className="text-sm text-white font-semibold">Energy Performance Certificate</p>
+                    {epc?.current_energy_efficiency && (
+                      <p className="text-xs text-mid">
+                        Score: {String(epc.current_energy_efficiency)}/100 · Potential: {String(epc?.potential_energy_efficiency ?? '?')}/100
+                      </p>
+                    )}
+                    <p className="text-xs text-mid">
+                      Last assessed: {epc?.last_epc_date ? formatDate(String(epc.last_epc_date)) : 'Unknown'}
                     </p>
-                    <p className="text-xs text-mid">Score: {String(epc?.current_energy_efficiency ?? '?')}/100 · Potential: {String(epc?.potential_energy_efficiency ?? '?')}/100</p>
-                    <p className="text-xs text-mid">Cert date: {String(epc?.last_epc_date ?? 'Unknown')}</p>
-                    {!epcCompliant && <p className="text-xs text-danger mt-1">Estimated upgrade cost: £4,000–£12,000 depending on works needed</p>}
                   </div>
                 </div>
               </div>
 
-              {/* Environmental risks */}
               {risks && risks.length > 0 && (
                 <div className="card p-5">
                   <p className="stat-label mb-3">ENVIRONMENTAL RISKS — HOMEDATA</p>
@@ -410,13 +398,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                 </div>
               )}
 
-              {/* Investment risks */}
               <div className="card p-5">
                 <p className="stat-label mb-3">INVESTMENT RISK FACTORS</p>
                 {[
                   { risk: 'Rental void risk', note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
                   { risk: 'Capital growth risk', note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
-                  { risk: 'EPC compliance', note: epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: epcCompliant ? 'low' : 'high' },
                   { risk: 'Leasehold risk', note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
                   { risk: 'Interest rate risk', note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
                 ].map(r => (
@@ -435,72 +421,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
             </div>
           )}
 
-          {/* 10YR PROJECTION */}
-          {tab === 'projection' && (
-            <div className="space-y-5">
-              {projectionData.length > 0 ? (
-                <>
-                  <div className="card p-5">
-                    <p className="stat-label mb-1">10-YEAR TOTAL RETURN PROJECTION</p>
-                    <p className="text-xs text-mid mb-4">Assumes {capitalGrowth}% annual capital growth · {MARKET_DATA.macro.rentalGrowthForecast}% annual rental growth · all costs held constant</p>
-                    <LineChart
-                      series={[
-                        { name: 'Property value', data: projectionData.map(y => y.propertyValue), color: '#00d4aa' },
-                        { name: 'Cumulative cashflow', data: projectionData.map(y => y.cumulativeCashflow), color: '#f0c040' },
-                        { name: 'Total return', data: projectionData.map(y => y.totalReturn), color: '#4d9fff' },
-                      ]}
-                      labels={projectionData.map(y => String(y.year))}
-                      height={130}
-                    />
-                    <div className="flex gap-4 mt-2">
-                      {[['Property value', '#00d4aa'], ['Cumulative cashflow', '#f0c040'], ['Total return', '#4d9fff']].map(([l, c]) => (
-                        <span key={l} className="flex items-center gap-1.5 text-[10px] text-mid">
-                          <span className="w-3 h-0.5 inline-block rounded" style={{ background: c }} />{l}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-border">
-                          {['Year', 'Property value', 'Monthly rent', 'Net/month', 'Cum. cashflow', 'Total return'].map(h => (
-                            <th key={h} className="text-left py-2 px-3 font-mono text-dim">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {projectionData.map(yr => (
-                          <tr key={yr.year} className="border-b border-border hover:bg-white/5">
-                            <td className="py-2 px-3 text-mid">{yr.year}</td>
-                            <td className="py-2 px-3 text-accent font-semibold">£{yr.propertyValue.toLocaleString()}</td>
-                            <td className="py-2 px-3 text-white">£{yr.monthlyRent.toLocaleString()}</td>
-                            <td className="py-2 px-3 text-accent">£{yr.netMonthly.toLocaleString()}</td>
-                            <td className="py-2 px-3 text-gold">£{yr.cumulativeCashflow.toLocaleString()}</td>
-                            <td className="py-2 px-3 text-blue-400 font-bold">£{yr.totalReturn.toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              ) : (
-                <div className="card p-8 text-center">
-                  <p className="text-3xl mb-3">📈</p>
-                  <p className="text-white font-semibold mb-2">Set rent to generate projection</p>
-                  <p className="text-mid text-sm">Go to the Financials tab and enter an expected monthly rent to see a 10-year return model.</p>
-                </div>
-              )}
-            </div>
-          )}
-
         </div>
       </div>
     </div>
   )
 }
 
-// ── City Market Panel with city dropdown + direct comparison ─────────────────
 function CityMarketPanel({
   cityName, cityData, propertyPrice, estimatedCurrentValue, propertyGrossYield, propertyNetYield, propertyRent, propertyBeds
 }: {
@@ -560,7 +486,6 @@ function CityMarketPanel({
         </select>
       </div>
 
-      {/* Bedroom filter pills */}
       <div className="flex gap-1.5 mb-4 flex-wrap items-center">
         {BEDS.map(b => (
           <button key={b.key} onClick={() => setSelectedBed(b.key)}
@@ -582,7 +507,6 @@ function CityMarketPanel({
         </div>
       )}
 
-      {/* Comparison table */}
       <div className="overflow-hidden rounded-xl border border-border">
         <div className="grid grid-cols-3 bg-white/5 px-3 py-2 border-b border-border">
           <span className="text-[10px] font-mono text-dim">METRIC</span>
