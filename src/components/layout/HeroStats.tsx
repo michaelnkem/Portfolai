@@ -71,7 +71,7 @@ export function HeroStats({ marketData }: HeroStatsProps) {
             )}
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
+        <div className={`grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5`}>
           {stats.map(s => (
             <div key={s.label} className={`bg-white/[0.025] border rounded-xl p-3 transition-colors ${selectedCity ? 'border-accent/20' : 'border-border'}`}>
               <p className="text-[9px] font-mono tracking-wide text-dim mb-1.5">{s.label}</p>
