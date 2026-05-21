@@ -47,6 +47,16 @@ export async function GET(req: NextRequest) {
       const propRecord = prop as Record<string, unknown>
       const postcode = String(propRecord.postcode || '')
 
+      // Normalize bedroom/bathroom BEFORE valuation — Homedata uses varying field names
+      const beds = propRecord.bedrooms ?? propRecord.bedroom_count ?? propRecord.num_bedrooms
+        ?? propRecord.beds ?? propRecord.habitable_rooms ?? null
+      const baths = propRecord.bathrooms ?? propRecord.bathroom_count ?? propRecord.num_bathrooms
+        ?? propRecord.baths ?? null
+
+      // Inject normalised values back so calcComparableValuation uses the correct count
+      propRecord.bedrooms = beds
+      propRecord.bathrooms = baths
+
       const defaults = {
         serviceCharge: String(propRecord.property_type || '').toLowerCase().includes('flat') ? 2000 : 0,
         groundRent: String(propRecord.tenure || '').toLowerCase().includes('leasehold') ? 200 : 0,
@@ -87,12 +97,6 @@ export async function GET(req: NextRequest) {
       ) : 0
 
       const floodRisk = (risks || []).find((r: Record<string,unknown>) => r.risk_type === 'flood_rivers_sea')
-
-      // Normalize bedroom/bathroom — Homedata uses varying field names
-      const beds = propRecord.bedrooms ?? propRecord.bedroom_count ?? propRecord.num_bedrooms
-        ?? propRecord.beds ?? propRecord.habitable_rooms ?? null
-      const baths = propRecord.bathrooms ?? propRecord.bathroom_count ?? propRecord.num_bathrooms
-        ?? propRecord.baths ?? null
 
       return NextResponse.json({
         uprn,
@@ -250,13 +254,16 @@ function getLrType(propertyType: string): string {
   return ''
 }
 
-function getTypicalFloorArea(propertyType: string): number {
+// Property type premium relative to the blended district average £/sqm.
+// Detached and semi command a premium; flats trade at a discount.
+// These ratios are calibrated to outer-London and UK regional markets (2026).
+function getTypeMultiplier(propertyType: string): number {
   const t = propertyType.toLowerCase()
-  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 60
-  if (t.includes('semi')) return 88
-  if (t.includes('terrace')) return 80
-  if (t.includes('detached') && !t.includes('semi')) return 110
-  return 80
+  if (t.includes('detached') && !t.includes('semi')) return 1.35
+  if (t.includes('semi')) return 1.20
+  if (t.includes('terrace')) return 1.10
+  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 0.82
+  return 1.0
 }
 
 function estimateFloorArea(beds: number, type: string): number {
@@ -275,7 +282,7 @@ async function calcComparableValuation(
 
   const subjectArea   = Number(prop.internal_area_sqm || prop.epc_floor_area || 0)
   const subjectType   = String(prop.property_type || '').toLowerCase()
-  const subjectBeds   = Number(prop.bedrooms || 2)
+  const subjectBeds   = Number(prop.bedrooms ?? 2)
   const subjectTenure = String(prop.tenure || '').toLowerCase()
   const subjectEpc    = String(prop.current_energy_rating || 'D')
   const hasParking    = Boolean(prop.has_parking)
@@ -333,15 +340,14 @@ async function calcComparableValuation(
       return fallback()
     }
 
-    // Recency-weighted average: recent months count more than older ones
-    // Exponential decay with λ=0.15 — month 0 weight=1.0, month 11 weight≈0.19
+    // Recency-weighted average: recent months count more than older ones.
+    // Exponential decay with λ=0.15 — month 0 weight=1.0, month 11 weight≈0.19.
     const weights = prices.map((_, i) => Math.exp(-0.15 * i))
     const totalWeight = weights.reduce((s, w) => s + w, 0)
     const weightedAvgPrice = prices.reduce((s, p, i) => s + p * weights[i], 0) / totalWeight
 
-    // Trend projection: estimate monthly momentum from the data window,
-    // then project forward by ~2 months to account for Homedata data lag.
-    // Uses most-recent 3 months vs oldest 3 months to measure trend direction.
+    // Trend projection: measure momentum from the data window and project forward
+    // ~2 months to account for typical data publication lag.
     // Capped at ±0.8%/month to prevent wild extrapolation from thin data.
     const recentSlice = prices.slice(0, Math.min(3, prices.length))
     const olderSlice  = prices.slice(-Math.min(3, prices.length))
@@ -353,17 +359,23 @@ async function calcComparableValuation(
     const dataLagMonths = 2
     const avgPrice = weightedAvgPrice * Math.pow(1 + monthlyGrowth, dataLagMonths)
 
-    const typicalArea = getTypicalFloorArea(subjectType)
-    const pricePerSqm = avgPrice / typicalArea
+    // RICS Comparable Method:
+    // 1. Derive district £/sqm using the outcode average price ÷ district avg floor area.
+    //    We use a constant 75 sqm as the district average (UK residential mean) so the
+    //    £/sqm is independent of property type — type differences are captured by the
+    //    typeMultiplier below, not by the denominator.
+    // 2. Multiply by the subject property's effective floor area.
+    // 3. Apply a property-type premium/discount relative to the blended district average.
+    const districtAvgFloorArea = 75
+    const pricePerSqm = avgPrice / districtAvgFloorArea
 
-    // Use the larger of actual floor area vs bed-count estimate
-    // Prevents undervaluation when Homedata returns a small/missing floor area
-    const effectiveArea = Math.max(
-      subjectArea > 0 ? subjectArea : 0,
-      estimateFloorArea(subjectBeds, subjectType)
-    )
+    // Use actual EPC floor area if known; fall back to bedroom-count estimate.
+    const effectiveArea = subjectArea > 0
+      ? subjectArea
+      : estimateFloorArea(subjectBeds, subjectType)
 
-    const baseValue = Math.round(pricePerSqm * effectiveArea)
+    const typeMultiplier = getTypeMultiplier(subjectType)
+    const baseValue = Math.round(pricePerSqm * effectiveArea * typeMultiplier)
 
     let adjustment = 1.0
     if      (subjectEpc === 'A' || subjectEpc === 'B') adjustment += 0.02
@@ -388,7 +400,7 @@ async function calcComparableValuation(
     const highValue = Math.round(adjustedValue * (1 + spread) / 1000) * 1000
     const fairValue = Math.round(adjustedValue / 1000) * 1000
 
-    console.log(`Homedata Valuation: £${fairValue.toLocaleString()} (${prices.length} periods, ${confidence}% conf, £${Math.round(pricePerSqm)}/sqm, area ${effectiveArea}sqm, weighted avg £${Math.round(weightedAvgPrice).toLocaleString()}, momentum ${(monthlyGrowth * 100).toFixed(2)}%/mo, projected avg £${Math.round(avgPrice).toLocaleString()})`)
+    console.log(`Valuation: £${fairValue.toLocaleString()} | beds=${subjectBeds} area=${effectiveArea}sqm type=${subjectType} multiplier=${typeMultiplier} | £${Math.round(pricePerSqm)}/sqm | weighted avg £${Math.round(weightedAvgPrice).toLocaleString()} | momentum ${(monthlyGrowth * 100).toFixed(2)}%/mo | projected avg £${Math.round(avgPrice).toLocaleString()} | conf=${confidence}%`)
 
     return { fairValue, lowValue, highValue, confidence, compsUsed: prices.length, method: 'homedata_price_trends' }
 
@@ -413,48 +425,56 @@ async function fetchLrHistory(
   if (!postcode) return []
 
   try {
-    const url = `http://landregistry.data.gov.uk/data/ppi/address.json?postcode=${encodeURIComponent(postcode)}&_pageSize=50`
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
-    if (!res.ok) return []
+    // Query the transaction-record endpoint directly by full postcode.
+    // 35-year window, up to 200 records, most-recent first.
+    const since = `${new Date().getFullYear() - 35}-01-01`
+    const url = `http://landregistry.data.gov.uk/data/ppi/transaction-record.json`
+      + `?propertyAddress.postcode=${encodeURIComponent(postcode)}`
+      + `&_pageSize=200`
+      + `&_sort=-transactionDate`
+      + `&min-transactionDate=${since}`
+
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store',
+    })
+
+    if (!res.ok) {
+      console.log(`LR transaction-record: HTTP ${res.status} for ${postcode}`)
+      return []
+    }
 
     const data = await res.json()
-    const addresses: Record<string, unknown>[] = (data?.result as Record<string, unknown>)?.items || []
-    console.log(`LR history: ${addresses.length} addresses for postcode ${postcode}`)
+    const items: Record<string, unknown>[] = (data?.result as Record<string, unknown>)?.items || []
+    console.log(`LR: ${items.length} raw transactions for postcode ${postcode}`)
 
-    const houseNumber = address.trim().split(' ')[0].replace(/\D/g, '')
+    if (items.length === 0) return []
+
+    // Extract the primary addressable object name (house number/name) from the
+    // full address string so we can filter to the specific property.
+    const paon = address.trim().split(/[\s,]+/)[0].toUpperCase()
+
     const results: LrTransaction[] = []
+    for (const item of items) {
+      const addrObj = item.propertyAddress as Record<string, unknown> | undefined
+      const itemPaon = String(addrObj?.paon || addrObj?.saon || item.paon || '').toUpperCase()
 
-    let fetched = 0
-    for (const addr of addresses) {
-      if (fetched >= 5) break
-      const paon = String(addr.paon || '')
-      if (houseNumber && paon && !paon.includes(houseNumber)) continue
+      // Filter to matching house number/name when we have one.
+      // A loose includes() check handles ranges like "121-123" matching "121".
+      if (paon && itemPaon && !itemPaon.includes(paon) && !paon.includes(itemPaon)) continue
 
-      const addrUrl = String(addr._about || '')
-      if (!addrUrl) continue
+      const price = Number(item.pricePaid || 0)
+      const date = String(item.transactionDate || '')
+      // Property type is a URI — take the last segment (F/S/T/D)
+      const type = String(item.propertyType || '').split('/').pop() || ''
 
-      try {
-        const txRes = await fetch(`${addrUrl}.json`, { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
-        fetched++
-        if (!txRes.ok) continue
-
-        const txData = await txRes.json()
-        const topic = (txData?.result as Record<string, unknown>)?.primaryTopic as Record<string, unknown>
-        const soldDates = topic?.soldDate
-        if (!soldDates) continue
-
-        const txList = Array.isArray(soldDates) ? soldDates : [soldDates]
-        for (const tx of txList) {
-          if (!tx) continue
-          const price = Number((tx as Record<string, unknown>).pricePaid || 0)
-          const date = String((tx as Record<string, unknown>).transactionDate || '')
-          const type = String((tx as Record<string, unknown>).propertyType || '').split('/').pop() || ''
-          if (price > 0) results.push({ price, date, type, address: paon })
-        }
-      } catch { continue }
+      if (price > 0 && date) {
+        results.push({ price, date, type, address: itemPaon || paon })
+      }
     }
 
     results.sort((a, b) => b.date.localeCompare(a.date))
+    console.log(`LR: ${results.length} matching transactions for ${paon} ${postcode}`)
     return results
 
   } catch (e) {
