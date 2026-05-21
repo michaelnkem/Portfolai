@@ -16,7 +16,11 @@ export type Tab = 'search' | 'market' | 'portfolio' | 'calculator'
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>('search')
-  const [marketData, setMarketData] = useState<LiveMarketData>(MARKET_DATA)
+  const [selectedProperty, setSelectedProperty] = useState<Record<string, unknown> | null>(null)
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiProperty, setAiProperty] = useState<Record<string, unknown> | null>(null)
+  const [portfolio, setPortfolio] = useState<Array<Record<string, unknown>>>([])
+  const [marketData, setMarketData] = useState<LiveMarketData>(MARKET_DATA as LiveMarketData)
 
   useEffect(() => {
     fetch('/api/market')
@@ -24,11 +28,6 @@ export default function Home() {
       .then(data => { if (data) setMarketData(data) })
       .catch(() => {})
   }, [])
-
-  const [selectedProperty, setSelectedProperty] = useState<Record<string, unknown> | null>(null)
-  const [aiOpen, setAiOpen] = useState(false)
-  const [aiProperty, setAiProperty] = useState<Record<string, unknown> | null>(null)
-  const [portfolio, setPortfolio] = useState<Array<Record<string, unknown>>>([])
 
   const openAI = useCallback((property: Record<string, unknown> | null = null) => {
     setAiProperty(property)
