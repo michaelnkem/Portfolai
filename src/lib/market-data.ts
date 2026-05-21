@@ -2,7 +2,7 @@
 // Sources: ONS HPI Feb 2026, Zoopla HPI April 2026, REalyse, Land Registry, BoE
 
 export const MARKET_DATA = {
-  dataAsOf: 'May 2026',   // ← add this line
+  dataAsOf: 'May 2026',
   macro: {
     bankRate: 4.0,
     inflation: 3.4,
