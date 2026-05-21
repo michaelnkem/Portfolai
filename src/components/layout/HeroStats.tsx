@@ -1,11 +1,12 @@
 'use client'
 
 interface HeroStatsProps {
-  marketData: { macro: Record<string, number> }
+  marketData: { macro: Record<string, number>; dataAsOf?: string }
 }
 
 export function HeroStats({ marketData }: HeroStatsProps) {
   const m = marketData.macro
+  const dataAsOf = (marketData.dataAsOf || 'May 2026').toUpperCase()
   const stats = [
     { label: 'UK AVG PRICE',      value: `£${m.ukAvgPrice.toLocaleString()}`, sub: '+1.2% yr/yr · ONS' },
     { label: 'BoE BASE RATE',     value: `${m.bankRate}%`, sub: 'Down from 5.25% peak', green: true },
@@ -22,7 +23,7 @@ export function HeroStats({ marketData }: HeroStatsProps) {
       <div className="max-w-[1320px] mx-auto">
         <div className="mb-5">
           <p className="text-[10px] font-mono tracking-[2px] text-accent mb-2">
-            LIVE UK MARKET DATA · MAY 2026
+            LIVE UK MARKET DATA · {dataAsOf}
           </p>
           <h1 className="font-display font-black text-3xl md:text-4xl text-white leading-tight">
             The professional&apos;s{' '}
