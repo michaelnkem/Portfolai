@@ -1,66 +1,89 @@
-// Server-side only — enriches static MARKET_DATA with live Homedata price trends
 import { getPriceTrends } from './homedata'
 import { MARKET_DATA } from './market-data'
 
-// Residential outcodes chosen for data density — mid-market, high transaction volume
+export type LiveMarketData = typeof MARKET_DATA
+
 const CITY_OUTCODES: Record<string, string> = {
   Manchester: 'M14',
   Birmingham: 'B29',
-  Liverpool:  'L18',
-  Leeds:      'LS6',
-  Sheffield:  'S10',
+  Liverpool: 'L18',
+  Leeds: 'LS6',
+  Sheffield: 'S10',
   Nottingham: 'NG7',
-  Bristol:    'BS6',
-  London:     'E17',
+  Bristol: 'BS6',
+  London: 'E17',
 }
 
-export type LiveMarketData = typeof MARKET_DATA
+function recencyWeightedAvg(trends: { period: string; mean_price: number }[], months = 6): number {
+  const sorted = [...trends]
+    .filter(t => t.mean_price > 0)
+    .sort((a, b) => b.period.localeCompare(a.period))
+    .slice(0, months)
+
+  if (sorted.length === 0) return 0
+
+  const λ = 0.15
+  let weightSum = 0
+  let valueSum = 0
+  sorted.forEach((t, i) => {
+    const w = Math.exp(-λ * i)
+    weightSum += w
+    valueSum += t.mean_price * w
+  })
+  return valueSum / weightSum
+}
+
+function capitalGrowth1yr(trends: { period: string; mean_price: number }[]): number {
+  const sorted = [...trends]
+    .filter(t => t.mean_price > 0)
+    .sort((a, b) => b.period.localeCompare(a.period))
+
+  if (sorted.length < 13) return 0
+  const recent = (sorted[0].mean_price + sorted[1].mean_price + sorted[2].mean_price) / 3
+  const prior = (sorted[12].mean_price + sorted[11].mean_price + sorted[10].mean_price) / 3
+  if (prior === 0) return 0
+  return parseFloat(((recent / prior - 1) * 100).toFixed(1))
+}
 
 export async function getLiveMarketData(): Promise<LiveMarketData> {
-  const cities = structuredClone(MARKET_DATA.cities) as typeof MARKET_DATA.cities
+  const cityEntries = Object.entries(CITY_OUTCODES)
 
-  await Promise.all(
-    Object.entries(CITY_OUTCODES).map(async ([city, outcode]) => {
-      try {
-        const trends = await getPriceTrends(outcode)
-        const sorted = [...trends].sort((a, b) => b.period.localeCompare(a.period))
-        const prices = sorted
-          .map(t => t.median_price || t.mean_price)
-          .filter(p => p > 10000)
-
-        if (prices.length < 6) return
-
-        // Recency-weighted avg for current avgPrice
-        const weights = prices.slice(0, 6).map((_, i) => Math.exp(-0.15 * i))
-        const totalW = weights.reduce((s, w) => s + w, 0)
-        const avgPrice = Math.round(
-          prices.slice(0, 6).reduce((s, p, i) => s + p * weights[i], 0) / totalW / 1000
-        ) * 1000
-
-        // capitalGrowth1yr: recent 3 months vs same window 12 months ago
-        let capitalGrowth1yr = cities[city as keyof typeof cities].capitalGrowth1yr
-        if (prices.length >= 12) {
-          const recentAvg = prices.slice(0, 3).reduce((s, p) => s + p, 0) / 3
-          const yearAgoSlice = prices.slice(9, 12)
-          const yearAgoAvg = yearAgoSlice.reduce((s, p) => s + p, 0) / yearAgoSlice.length
-          capitalGrowth1yr = parseFloat(((recentAvg / yearAgoAvg - 1) * 100).toFixed(1))
-        }
-
-        cities[city as keyof typeof cities] = {
-          ...cities[city as keyof typeof cities],
-          avgPrice,
-          capitalGrowth1yr,
-        }
-
-        console.log(`Live market: ${city} avgPrice=£${avgPrice.toLocaleString()} growth=${capitalGrowth1yr}%`)
-      } catch (e) {
-        console.error(`Live market data failed for ${city} (${outcode}):`, e)
-      }
+  const results = await Promise.allSettled(
+    cityEntries.map(async ([city, outcode]) => {
+      const trends = await getPriceTrends(outcode)
+      if (!trends || trends.length < 6) return null
+      const avgPrice = Math.round(recencyWeightedAvg(trends))
+      const growth = capitalGrowth1yr(trends)
+      return { city, avgPrice, capitalGrowth1yr: growth }
     })
   )
+
+  const cityUpdates: Record<string, { avgPrice: number; capitalGrowth1yr: number }> = {}
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled' && r.value) {
+      const { city, avgPrice, capitalGrowth1yr } = r.value
+      if (avgPrice > 50000) {
+        cityUpdates[city] = { avgPrice, capitalGrowth1yr }
+      }
+    } else {
+      console.log(`getLiveMarketData: ${cityEntries[i][0]} fell back to static`)
+    }
+  })
+
+  const cities = { ...MARKET_DATA.cities }
+  for (const [city, updates] of Object.entries(cityUpdates)) {
+    const key = city as keyof typeof cities
+    if (cities[key]) {
+      cities[key] = { ...cities[key], ...updates }
+    }
+  }
 
   const now = new Date()
   const dataAsOf = now.toLocaleString('en-GB', { month: 'long', year: 'numeric' })
 
-  return { ...MARKET_DATA, cities, dataAsOf }
+  return {
+    ...MARKET_DATA,
+    dataAsOf,
+    cities,
+  } as LiveMarketData
 }
