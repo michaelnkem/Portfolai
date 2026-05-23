@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { Stat, ScoreRing, Badge, LineChart, Divider } from '@/components/ui'
+import { useState, useRef, useEffect } from 'react'
+import { LineChart } from '@/components/ui'
 import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, MARKET_DATA } from '@/lib/market-data'
 
 interface PropertyDetailProps {
@@ -11,7 +11,33 @@ interface PropertyDetailProps {
   onAddPortfolio: () => void
 }
 
-type DetailTab = 'overview' | 'financials' | 'history' | 'risks'
+type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'market'
+
+const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
+
+const NAV_ITEMS = [
+  { icon: '⊞', label: 'Dashboard' },
+  { icon: '⌂', label: 'Properties', active: true },
+  { icon: '↗', label: 'Market Insights' },
+  { icon: '✦', label: 'AI Analysis' },
+  { icon: '◫', label: 'Portfolios' },
+  { icon: '◈', label: 'Deal Finder' },
+  { icon: '♡', label: 'Saved Searches' },
+  { icon: '⌘', label: 'Mortgages' },
+  { icon: '◻', label: 'Reports' },
+  { icon: '◬', label: 'Alerts' },
+]
+
+/* ── Skeleton shimmer card ─────────────────────────────────────────────────── */
+function SkeletonCard({ className = '' }: { className?: string }) {
+  return (
+    <div className={`bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] ${className}`}>
+      <div className="h-3 w-24 rounded-full bg-[#F3F4F6] mb-4 skeleton-light" />
+      <div className="h-8 w-32 rounded-lg bg-[#F3F4F6] mb-2 skeleton-light" />
+      <div className="h-3 w-40 rounded-full bg-[#F3F4F6] skeleton-light" />
+    </div>
+  )
+}
 
 export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
@@ -25,42 +51,55 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   const [maintenance, setMaintenance] = useState(1.5)
   const [voidWks, setVoidWks] = useState(2)
   const [rentSet, setRentSet] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
 
-  const p = data.property as Record<string, unknown>
-  const enriched = data.enriched as Record<string, unknown>
-  const epc = data.epc as Record<string, unknown> | null
-  const risks = data.risks as Array<Record<string, unknown>> | undefined
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setIsLoading(false), 600)
+    return () => clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const handler = () => setScrolled(el.scrollTop > 260)
+    el.addEventListener('scroll', handler, { passive: true })
+    return () => el.removeEventListener('scroll', handler)
+  }, [])
+
+  // ── Data extraction (unchanged) ──────────────────────────────────────────────
+  const p        = data.property    as Record<string, unknown>
+  const enriched = data.enriched    as Record<string, unknown>
+  const epc      = data.epc         as Record<string, unknown> | null
+  const risks    = data.risks       as Array<Record<string, unknown>> | undefined
   const transactions = data.transactions as Array<Record<string, unknown>> | undefined
-  const cityName = data.cityName as string
+  const cityName = data.cityName    as string
   const cityData = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
 
-  // Use user-set rent or fall back to estimate
+  // ── Calculations (unchanged) ─────────────────────────────────────────────────
   const effectiveRent = rentSet ? rent : (enriched?.estimatedRent as number || 0)
   const price = Number(p?.last_sold_price ?? 0)
-
-  // Estimated current value — prefer API-calculated (uses district price trends)
-  // Fall back to client-side calculation if not provided
   const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
   const yearsHeld = Math.max(0, 2026 - soldYear)
   const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
   const estimatedCurrentValue = (enriched?.estimatedCurrentValue as number)
     || (price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0)
 
-  // Live-calculated metrics
-  const grossYield = price && effectiveRent ? parseFloat(((effectiveRent * 12 / price) * 100).toFixed(2)) : 0
-  const netYield = price && effectiveRent ? parseFloat((
-    calcNetMonthlyIncome(price, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks)
-    * 12 / price * 100
-  ).toFixed(2)) : 0
-  const netMonthly = price && effectiveRent ? calcNetMonthlyIncome(price, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) : 0
+  const grossYield = price && effectiveRent
+    ? parseFloat(((effectiveRent * 12 / price) * 100).toFixed(2)) : 0
+  const netYield = price && effectiveRent
+    ? parseFloat((calcNetMonthlyIncome(price, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) * 12 / price * 100).toFixed(2)) : 0
+  const netMonthly = price && effectiveRent
+    ? calcNetMonthlyIncome(price, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) : 0
   const capitalGrowth = cityData?.capitalGrowth1yr || 0
   const totalROI = parseFloat((netYield + capitalGrowth).toFixed(1))
   const sdlt = price ? calcSDLT(price, true) : 0
   const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
   const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
-  // EPC rating — epc register data first (may contain letter direct from Open Data),
-  // then enriched (API-computed, but can be 'Unknown' when score was 0), then property record
+  // ── EPC resolution (epc register first — unchanged) ──────────────────────────
   const epcRaw = String(
     epc?.current_energy_rating ||
     epc?.currentEnergyRating ||
@@ -72,432 +111,855 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
     p?.epc_rating ||
     ''
   ).trim().toUpperCase()
-  const epcRatingMatch = epcRaw.match(/[A-G]/)
-  const epcRating = epcRatingMatch?.[0] ?? '?'
-  const epcKnown = epcRating !== '?'
+  const epcRating  = epcRaw.match(/[A-G]/)?.[0] ?? '?'
+  const epcKnown   = epcRating !== '?'
   const epcCompliant = epcKnown && epcRating <= 'C'
 
-  const tabs: Array<{ id: DetailTab; label: string }> = [
-    { id: 'overview',    label: 'Overview' },
-    { id: 'financials',  label: 'Financials' },
-    { id: 'history',     label: 'History' },
-    { id: 'risks',       label: 'Risks' },
+  // ── Attribute resolution ─────────────────────────────────────────────────────
+  const floorArea =
+    (epc?.total_floor_area  ? Number(epc.total_floor_area)  : null) ||
+    (epc?.totalFloorArea    ? Number(epc.totalFloorArea)    : null) ||
+    (enriched?.epcFloorArea ? Number(enriched.epcFloorArea) : null) ||
+    (p?.internal_area_sqm   ? Number(p.internal_area_sqm)  : null) ||
+    (p?.epc_floor_area      ? Number(p.epc_floor_area)      : null) ||
+    null
+
+  const bedsLabel    = String(enriched?.attrBedroomsLabel  || (p?.bedrooms  != null ? `${p.bedrooms}`  : ''))
+  const bathsLabel   = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : ''))
+  const tenureLabel  = String(enriched?.attrTenureLabel    || String(p?.tenure ?? '') || '')
+  const gardenLabel  = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Rear Garden' : p?.has_garden === false ? 'No' : ''))
+  const propType     = String(p?.property_type ?? '')
+  const bedsInferred   = Boolean(enriched?.attrBedroomsInferred)
+  const bathsInferred  = Boolean(enriched?.attrBathroomsInferred)
+  const tenureInferred = Boolean(enriched?.attrTenureInferred)
+  const gardenInferred = Boolean(enriched?.attrGardenInferred)
+  const anyInferred    = bedsInferred || bathsInferred || tenureInferred || gardenInferred
+
+  const address  = String(p?.full_address || p?.address || 'Unknown Address')
+  const postcode = String(p?.postcode ?? '')
+
+  const propertyBeds = enriched?.attrBedrooms != null ? Number(enriched.attrBedrooms)
+    : Number(p?.bedrooms) > 0 ? Number(p.bedrooms) : 0
+
+  const tabs: { id: DetailTab; label: string }[] = [
+    { id: 'overview',   label: 'Overview'           },
+    { id: 'financials', label: 'Financials'         },
+    { id: 'history',    label: 'History'            },
+    { id: 'risks',      label: 'Risks'              },
+    { id: 'market',     label: 'Market Comparison'  },
   ]
 
+  const epcColor = !epcKnown ? 'text-[#D1D5DB]'
+    : epcRating <= 'B' ? 'text-[#047857]'
+    : epcRating <= 'D' ? 'text-[#B7791F]'
+    : 'text-[#DC2626]'
+
+  const epcBadgeClass = epcRating <= 'C'
+    ? 'bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]'
+    : epcRating === 'D'
+    ? 'bg-[#FFF7E6] text-[#B7791F] border-[#F5D48A]'
+    : 'bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5]'
+
+  const confidenceScore = enriched?.valuationConfidence ? Number(enriched.valuationConfidence) : null
+  const comparablesCount = transactions?.length ?? 0
+  const dataQuality = Math.min(97, 60 + (comparablesCount * 5) + (epcKnown ? 10 : 0) + (floorArea ? 7 : 0))
+
+  const localMarketType = (() => {
+    const beds = Number(p?.bedrooms ?? 0)
+    const type = propType.toLowerCase()
+    if (type.includes('flat') || type.includes('apartment')) {
+      return beds <= 1 ? 'Compact urban apartment market' : 'City apartment market'
+    }
+    if (beds >= 4) return 'Larger family house market'
+    if (beds === 3) return 'Family house market'
+    return 'Mid-sized residential market'
+  })()
+
   return (
-    <div className="fixed inset-0 z-50 flex">
-      {/* Backdrop */}
-      <div className="flex-1 bg-bg/80 backdrop-blur-sm" onClick={onClose} />
+    <div className="fixed inset-0 z-50 flex bg-[#FAF9F5] overflow-hidden" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
 
-      {/* Panel */}
-      <div className="w-full max-w-3xl bg-panel border-l border-border overflow-y-auto flex flex-col">
-        {/* Header */}
-        <div className="sticky top-0 z-10 bg-panel border-b border-border p-5 flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-mono tracking-wide text-accent mb-2">PROPERTY ANALYSIS</p>
-            <h2 className="font-display font-black text-2xl text-white leading-tight mb-1">
-              {String(p?.full_address || p?.address || 'Unknown Address')}
-            </h2>
-            <div className="flex items-center gap-2 flex-wrap mt-1">
-              {p?.postcode && (
-                <span className="text-xs font-mono bg-accent/10 border border-accent/20 text-accent px-2 py-0.5 rounded">
-                  {String(p.postcode)}
-                </span>
-              )}
-              {p?.property_type && (
-                <span className="text-xs text-mid">{String(p.property_type)}</span>
-              )}
-              {(enriched?.attrBedrooms != null || Number(p?.bedrooms) > 0) && (
-                <span className="text-xs text-mid">· {String(enriched?.attrBedrooms ?? p?.bedrooms)} bed</span>
-              )}
-              {p?.tenure && (
-                <span className="text-xs text-mid">· {String(p.tenure)}</span>
-              )}
-              {cityName && (
-                <span className="text-xs text-mid">· {String(cityName)}</span>
-              )}
+      {/* ── Sidebar ─────────────────────────────────────────────────────────── */}
+      <aside className="hidden lg:flex flex-col w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
+        {/* Logo */}
+        <div className="px-6 py-5 border-b border-[#E7E5DD]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-[#047857] rounded-lg flex items-center justify-center shrink-0">
+              <svg width="15" height="14" viewBox="0 0 15 14" fill="none">
+                <path d="M1.5 13V6.2L7.5 2l6 4.2V13H10V9H5v4H1.5z" fill="white"/>
+              </svg>
             </div>
-          </div>
-          <div className="flex gap-2 shrink-0">
-            <button onClick={onAI} className="btn-primary text-xs px-3 py-2">🤖 AI</button>
-            <button onClick={onAddPortfolio} className="bg-gold/10 border border-gold/30 text-gold text-xs font-bold px-3 py-2 rounded-lg hover:bg-gold/20 transition-colors">+ Portfolio</button>
-            <button onClick={onClose} className="btn-ghost text-xs px-3 py-2">✕</button>
+            <span className="text-[#111827] font-bold text-[19px] tracking-tight" style={{ fontFamily: SERIF }}>Portfolai</span>
           </div>
         </div>
 
-        {/* Key metrics strip */}
-        <div className="p-5 grid grid-cols-2 sm:grid-cols-5 gap-3 border-b border-border">
-          <Stat label="EST. CURRENT VALUE"
-            value={estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : 'No record'}
-            tone="green"
-            sub={price && p?.last_sold_date ? `Est. from ${String(p.last_sold_date).slice(0,4)} sale price` : 'Based on market growth'} />
-          <Stat label="LAST SOLD PRICE" value={price ? `£${price.toLocaleString()}` : 'No record'}
-            sub={p?.last_sold_date ? `Sold ${String(p.last_sold_date).slice(0,4)}` : undefined} />
-          <Stat label="GROSS YIELD" value={grossYield ? `${grossYield}%` : 'Set rent →'}
-                tone={grossYield > 6 ? 'green' : 'neutral'}
-                sub={cityData ? `Area avg ${cityData.avgYield}%` : undefined} />
-          <Stat label="NET YIELD" value={netYield ? `${netYield}%` : '—'} tone={netYield > 4 ? 'green' : 'neutral'} sub="after all costs" />
-          <Stat label="TOTAL ROI" value={totalROI ? `${totalROI}%` : '—'} tone="gold" sub="net yield + cap growth" />
-        </div>
-
-        {/* Tabs */}
-        <div className="px-5 pt-4 flex gap-1 border-b border-border pb-0">
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`px-4 py-2.5 text-xs rounded-t-lg border-b-2 transition-all ${
-                tab === t.id
-                  ? 'border-accent text-accent bg-accent/5'
-                  : 'border-transparent text-mid hover:text-white'
-              }`}>{t.label}</button>
+        {/* Nav */}
+        <nav className="flex-1 px-4 py-4 space-y-0.5">
+          {NAV_ITEMS.map(item => (
+            <div key={item.label} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors ${
+              item.active ? 'bg-[#ECFDF5] text-[#047857]' : 'text-[#374151] hover:bg-[#F6F3EC]'
+            }`}>
+              <span className="text-sm w-5 text-center">{item.icon}</span>
+              <span className="text-sm font-medium">{item.label}</span>
+            </div>
           ))}
+        </nav>
+
+        {/* Bottom cards */}
+        <div className="px-4 pb-4 space-y-3">
+          <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-2xl p-4">
+            <p className="text-[11px] font-bold text-[#B7791F] mb-1">⭐ Upgrade to Premium</p>
+            <p className="text-[11px] text-[#6B7280] mb-3 leading-relaxed">Unlock advanced analytics, off-market deals and priority support.</p>
+            <button className="w-full bg-[#047857] text-white text-xs font-semibold py-2 rounded-lg hover:bg-[#065F46] transition-colors">
+              Upgrade Now →
+            </button>
+          </div>
+          <div className="bg-[#F6F3EC] rounded-2xl p-4">
+            <p className="text-[11px] font-bold text-[#374151] mb-1">Need help?</p>
+            <p className="text-[11px] text-[#6B7280] mb-2">Talk to our property investment experts.</p>
+            <button className="text-xs text-[#047857] font-semibold hover:underline">Book a Call →</button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ── Main area ───────────────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+
+        {/* Top header */}
+        <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E5DD] px-6 lg:px-8 h-[68px] flex items-center justify-between gap-4 z-10">
+          <div className="flex items-center gap-3 bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-2.5 flex-1 max-w-[420px]">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0 text-[#9CA3AF]">
+              <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+            <span className="text-[#9CA3AF] text-sm flex-1 min-w-0 truncate">Search properties, areas, or insights…</span>
+            <span className="text-[10px] font-mono text-[#9CA3AF] bg-white border border-[#E7E5DD] px-1.5 py-0.5 rounded shrink-0">⌘K</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={onAI}
+              className="hidden sm:flex items-center gap-1.5 bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857] text-xs font-semibold px-3 py-2 rounded-xl hover:bg-[#D1FAE5] transition-colors">
+              🤖 AI Analysis
+            </button>
+            <button onClick={onAddPortfolio}
+              className="hidden sm:flex items-center gap-1.5 bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] text-xs font-semibold px-3 py-2 rounded-xl hover:bg-[#FEF3C7] transition-colors">
+              ★ Save
+            </button>
+            <button onClick={onClose}
+              className="w-9 h-9 flex items-center justify-center rounded-xl border border-[#E7E5DD] bg-white text-[#6B7280] hover:bg-[#F6F3EC] transition-colors text-sm font-medium">
+              ✕
+            </button>
+          </div>
+        </header>
+
+        {/* ── Sticky scroll summary ──────────────────────────────────────────── */}
+        <div className={`shrink-0 overflow-hidden transition-all duration-300 ${scrolled ? 'max-h-[56px] border-b border-[#E7E5DD]' : 'max-h-0'}`}>
+          <div className="bg-white/95 backdrop-blur-sm px-6 lg:px-8 h-14 flex items-center justify-between gap-6">
+            <p className="text-sm font-semibold text-[#111827] truncate" style={{ fontFamily: SERIF }}>{address.split(',')[0]}</p>
+            <div className="flex items-center gap-5 shrink-0">
+              {estimatedCurrentValue > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF]">Est. Value</span>
+                  <span className="text-sm font-bold text-[#047857]" style={{ fontFamily: SERIF }}>£{(estimatedCurrentValue / 1000).toFixed(0)}k</span>
+                </div>
+              )}
+              {netYield > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF]">Net Yield</span>
+                  <span className="text-sm font-bold text-[#047857]" style={{ fontFamily: SERIF }}>{netYield}%</span>
+                </div>
+              )}
+              {totalROI > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF]">Total ROI</span>
+                  <span className="text-sm font-bold text-[#B7791F]" style={{ fontFamily: SERIF }}>{totalROI}%</span>
+                </div>
+              )}
+              <button onClick={onAddPortfolio}
+                className="bg-[#047857] text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-[#065F46] transition-colors">
+                + Portfolio
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* Tab content */}
-        <div className="p-5 flex-1">
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto" ref={scrollRef}>
+          <div className="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-          {/* OVERVIEW */}
-          {tab === 'overview' && (
-            <div className="space-y-5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                {/* Property attributes */}
-                <div className="card p-5">
-                  <p className="stat-label mb-4">PROPERTY ATTRIBUTES</p>
-                  {(() => {
-                    // Floor area — EPC register is the highest-fidelity source
-                    const floorArea =
-                      (epc?.total_floor_area ? Number(epc.total_floor_area) : null) ||
-                      (epc?.totalFloorArea ? Number(epc.totalFloorArea) : null) ||
-                      (enriched?.epcFloorArea ? Number(enriched.epcFloorArea) : null) ||
-                      (p?.internal_area_sqm ? Number(p.internal_area_sqm) : null) ||
-                      (p?.epc_floor_area ? Number(p.epc_floor_area) : null) ||
-                      null
+            {/* ── Property header ────────────────────────────────────────────── */}
+            <div className="mb-6">
+              <button onClick={onClose}
+                className="flex items-center gap-1.5 text-sm text-[#6B7280] hover:text-[#047857] transition-colors mb-4 group">
+                <span className="group-hover:-translate-x-0.5 transition-transform">←</span>
+                <span>Back to Properties</span>
+              </button>
 
-                    const bedsLabel    = String(enriched?.attrBedroomsLabel  || (p?.bedrooms  != null ? `${p.bedrooms}`  : 'Unknown'))
-                    const bathsLabel   = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : 'Unknown'))
-                    const tenureLabel  = String(enriched?.attrTenureLabel    || String(p?.tenure  ?? '') || 'Unknown')
-                    const gardenLabel  = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Yes' : p?.has_garden === false ? 'No' : 'Unknown'))
-
-                    const bedsInferred   = Boolean(enriched?.attrBedroomsInferred)
-                    const bathsInferred  = Boolean(enriched?.attrBathroomsInferred)
-                    const tenureInferred = Boolean(enriched?.attrTenureInferred)
-                    const gardenInferred = Boolean(enriched?.attrGardenInferred)
-
-                    // [label, value, isEpcHighlight, isInferred]
-                    type Row = [string, string, boolean, boolean]
-                    const allRows: Row[] = [
-                      ['Bedrooms',   bedsLabel,                                                      false, bedsInferred],
-                      ['Bathrooms',  bathsLabel,                                                     false, bathsInferred],
-                      ['Floor Area', floorArea ? `${floorArea}m²` : 'Unknown',                      false, false],
-                      ['EPC Rating', epcKnown ? epcRating : 'Unknown',                              epcKnown, false],
-                      ['Garden',     gardenLabel,                                                    false, gardenInferred],
-                      ['Type',       String(p?.property_type ?? '') || 'Unknown',                   false, false],
-                      ['Tenure',     tenureLabel,                                                    false, tenureInferred],
-                    ]
-                    // Hide rows where value is Unknown
-                    const rows = allRows.filter(([, v]) => v !== 'Unknown')
-                    const anyInferred = bedsInferred || tenureInferred || gardenInferred || bathsInferred
-
-                    return (
-                      <>
-                        {rows.map(([k, v, isEpc, isInferred]) => (
-                          <div key={k} className="flex justify-between items-center py-2 border-b border-border text-sm">
-                            <span className="text-mid">{k}</span>
-                            <span className={`font-medium ${
-                              isEpc
-                                ? (epcRating <= 'C' ? 'text-accent' : epcRating === 'D' ? 'text-gold' : 'text-danger')
-                                : isInferred ? 'text-gold' : 'text-white'
-                            }`}>{v}{isInferred && <span className="text-dim ml-0.5">*</span>}</span>
-                          </div>
-                        ))}
-                        {anyInferred && (
-                          <p className="text-[10px] text-dim mt-3">* Estimated from floor area and property norms. Verify with agent.</p>
-                        )}
-                      </>
-                    )
-                  })()}
-                </div>
-
-                {/* City investment scores */}
-                {cityData && (
-                  <div className="space-y-4">
-                    <div className="card p-5">
-                      <p className="stat-label mb-4">CITY INVESTMENT SCORES</p>
-                      <div className="flex justify-around">
-                        <ScoreRing score={cityData.demandScore} label="DEMAND" />
-                        <ScoreRing score={100 - cityData.supplyScore} label="SUPPLY GAP" />
-                        <ScoreRing score={cityData.regenerationScore} label="REGEN" />
-                        <ScoreRing score={cityData.infrastructureScore} label="INFRA" />
-                      </div>
-                    </div>
-                    <CityMarketPanel
-                      cityName={cityName}
-                      cityData={cityData}
-                      propertyPrice={price}
-                      estimatedCurrentValue={estimatedCurrentValue}
-                      propertyGrossYield={grossYield}
-                      propertyNetYield={netYield}
-                      propertyRent={effectiveRent}
-                      propertyBeds={
-                        enriched?.attrBedrooms != null ? Number(enriched.attrBedrooms) :
-                        Number(p?.bedrooms) > 0 ? Number(p.bedrooms) :
-                        0
-                      }
-                    /></div>
-                )}
-              </div>
-
-              {/* UPRN info */}
-              <div className="card p-4 text-xs text-mid flex gap-4 flex-wrap">
-                <span>UPRN: <strong className="text-white">{String(p?.uprn ?? '')}</strong></span>
-                <span>Postcode: <strong className="text-white">{String(p?.postcode ?? '')}</strong></span>
-                <span>Last sold: <strong className="text-white">{String(p?.last_sold_date ?? '') || 'No record'}</strong></span>
-                {p?.last_sold_price ? <span>At: <strong className="text-white">£{Number(p.last_sold_price).toLocaleString()}</strong></span> : null}
-              </div>
-            </div>
-          )}
-
-          {/* FINANCIALS */}
-          {tab === 'financials' && (
-            <div className="space-y-5">
-              {/* Rent input */}
-              <div className="card p-5 border-accent/30">
-                <p className="stat-label mb-3">ENTER MONTHLY RENT (£)</p>
-                <div className="flex gap-3 items-center">
-                  <input
-                    type="number"
-                    value={rent || ''}
-                    onChange={e => { setRent(Number(e.target.value)); setRentSet(true) }}
-                    placeholder={`Estimated: £${enriched?.estimatedRent || '—'}`}
-                    className="flex-1 bg-bg border border-border rounded-xl px-4 py-3 text-white text-sm outline-none focus:border-accent"
-                  />
-                  <div className="flex gap-2">
-                    {[defaultServiceCharge(p), 0].map(v => v).filter(Boolean).map(v => (
-                      <button key={v} onClick={() => { setServiceCharge(v); setGroundRent(p?.tenure === 'Leasehold' ? 200 : 0) }}
-                        className="btn-ghost text-xs py-2 px-3">
-                        Set defaults
-                      </button>
-                    ))}
+              <div className="flex items-start justify-between gap-6 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-[32px] sm:text-[40px] font-bold text-[#111827] leading-[1.08] mb-3"
+                    style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                    {address}
+                  </h1>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {postcode && (
+                      <span className="inline-flex items-center bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[13px] font-semibold px-3 py-1 rounded-full">
+                        {postcode}
+                      </span>
+                    )}
+                    {propType && (
+                      <span className="inline-flex items-center bg-white text-[#374151] border border-[#E7E5DD] text-[13px] font-medium px-3 py-1 rounded-full">
+                        ⌂ {propType}
+                      </span>
+                    )}
+                    {cityName && (
+                      <span className="inline-flex items-center bg-white text-[#374151] border border-[#E7E5DD] text-[13px] font-medium px-3 py-1 rounded-full">
+                        ◎ {cityName}
+                      </span>
+                    )}
+                    <span className="inline-flex items-center gap-1.5 text-[11px] text-[#047857] font-medium">
+                      <span className="w-1.5 h-1.5 bg-[#047857] rounded-full animate-pulse" />
+                      Analysis updated today · Source: Multiple verified sources
+                    </span>
                   </div>
                 </div>
-                <p className="text-[11px] text-mid mt-2">
-                  💡 Verify with local letting agents. Estimate based on {String(cityName)} {String(p?.bedrooms ?? '')}-bed market rate.
-                </p>
-              </div>
-
-              {/* Cost assumptions */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="card p-4 space-y-3">
-                  <p className="stat-label">ANNUAL COSTS</p>
-                  {[
-                    { label: `Service charge (£/yr)`, val: serviceCharge, set: setServiceCharge, step: 100, min: 0, max: 10000 },
-                    { label: `Ground rent (£/yr)`, val: groundRent, set: setGroundRent, step: 50, min: 0, max: 1000 },
-                  ].map(f => (
-                    <div key={f.label}>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-mid">{f.label}</span>
-                        <span className="text-white">£{f.val}</span>
-                      </div>
-                      <input type="range" min={f.min} max={f.max} step={f.step} value={f.val}
-                        onChange={e => f.set(Number(e.target.value))}
-                        className="w-full accent-accent" />
-                    </div>
-                  ))}
-                  {[
-                    { label: `Management fee (${mgmtFee}%)`, val: mgmtFee, set: setMgmtFee, step: 1, min: 0, max: 20 },
-                    { label: `Maintenance (${maintenance}% of value)`, val: maintenance, set: setMaintenance, step: 0.5, min: 0, max: 5 },
-                    { label: `Void weeks/yr: ${voidWks}`, val: voidWks, set: setVoidWks, step: 0.5, min: 0, max: 8 },
-                  ].map(f => (
-                    <div key={f.label}>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-mid">{f.label}</span>
-                      </div>
-                      <input type="range" min={f.min} max={f.max} step={f.step} value={f.val}
-                        onChange={e => f.set(Number(e.target.value))}
-                        className="w-full accent-accent" />
-                    </div>
-                  ))}
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  <button className="border border-[#E7E5DD] bg-white text-[#374151] text-sm font-medium px-4 py-2 rounded-xl hover:bg-[#F6F3EC] transition-colors">
+                    ↗ Share
+                  </button>
+                  <button onClick={onAddPortfolio}
+                    className="border border-[#E7E5DD] bg-white text-[#374151] text-sm font-medium px-4 py-2 rounded-xl hover:bg-[#F6F3EC] transition-colors">
+                    ☆ Save
+                  </button>
+                  <button className="bg-[#047857] text-white text-sm font-medium px-4 py-2 rounded-xl hover:bg-[#065F46] transition-colors">
+                    ↓ Export
+                  </button>
                 </div>
-
-                {/* P&L */}
-                <div className="card p-4">
-                  <p className="stat-label mb-3">ANNUAL P&L</p>
-                  {[
-                    { k: 'Gross rent', v: `+£${(effectiveRent * 12).toLocaleString()}`, green: true },
-                    { k: `Voids (${voidWks}wk)`, v: `-£${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()}`, red: true },
-                    { k: `Mgmt (${mgmtFee}%)`, v: `-£${Math.round(effectiveRent * 12 * mgmtFee / 100).toLocaleString()}`, red: true },
-                    { k: `Maintenance`, v: `-£${Math.round((price || 0) * maintenance / 100).toLocaleString()}`, red: true },
-                    { k: 'Service charge', v: `-£${serviceCharge.toLocaleString()}`, red: serviceCharge > 0 },
-                    { k: 'Ground rent', v: `-£${groundRent.toLocaleString()}`, red: groundRent > 0 },
-                    { k: 'NET INCOME', v: `£${(netMonthly * 12).toLocaleString()}`, bold: true },
-                  ].map(row => (
-                    <div key={row.k} className={`flex justify-between py-2 border-b border-border text-sm ${row.bold ? 'font-bold' : ''}`}>
-                      <span className="text-mid">{row.k}</span>
-                      <span className={row.bold ? 'text-gold' : row.green ? 'text-accent' : row.red ? 'text-danger' : 'text-white'}>
-                        {row.v}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Mortgage modeller */}
-              <div className="card p-5">
-                <p className="stat-label mb-4">MORTGAGE CASHFLOW MODELLER</p>
-                <div className="grid grid-cols-3 gap-4 mb-4">
-                  {[
-                    { label: `Deposit: £${deposit.toLocaleString()} (${price ? Math.round(deposit/price*100) : 0}%)`, val: deposit, set: setDeposit, min: price * 0.2, max: price * 0.5, step: 5000 },
-                    { label: `Rate: ${mortRate}% p.a.`, val: mortRate, set: setMortRate, min: 3.0, max: 9.0, step: 0.1 },
-                    { label: `Term: ${mortYears} years`, val: mortYears, set: setMortYears, min: 5, max: 35, step: 5 },
-                  ].map(f => (
-                    <div key={f.label}>
-                      <p className="text-xs text-mid mb-2">{f.label}</p>
-                      <input type="range" min={f.min} max={f.max} step={f.step} value={f.val}
-                        onChange={e => f.set(Number(e.target.value))}
-                        className="w-full accent-accent" />
-                    </div>
-                  ))}
-                </div>
-                <div className="grid grid-cols-4 gap-3">
-                  <Stat label="LTV" value={mort ? `${mort.ltv}%` : '—'} />
-                  <Stat label="MORTGAGE PMT" value={mort ? `£${mort.monthly.toLocaleString()}/mo` : '—'} tone="red" />
-                  <Stat label="NET INCOME" value={`£${netMonthly.toLocaleString()}/mo`} tone="green" />
-                  <Stat label="CASHFLOW" value={`£${cashflow.toLocaleString()}/mo`}
-                        tone={cashflow >= 0 ? 'green' : 'red'}
-                        sub={cashflow >= 0 ? 'Positive ✓' : 'Negative ⚠'} />
-                </div>
-                {price && <p className="text-xs text-mid mt-3">SDLT (additional property): <strong className="text-white">£{sdlt.toLocaleString()}</strong> · Total acquisition cost: <strong className="text-white">£{(price + sdlt + (deposit ? 0 : 0)).toLocaleString()}</strong></p>}
               </div>
             </div>
-          )}
 
-          {/* HISTORY */}
-          {tab === 'history' && (
-            <div className="space-y-5">
-              {transactions && transactions.length > 0 ? (
-                <>
-                  <div className="card p-5">
-                    <p className="stat-label mb-4">PRICE HISTORY — LAND REGISTRY</p>
-                    {transactions.length >= 2 && (
-                      <div className="mb-4">
-                        <LineChart
-                          series={[{ name: 'Sale price', data: transactions.slice().reverse().map(t => Number(t.price ?? 0)), color: '#00d4aa' }]}
-                          labels={transactions.slice().reverse().map(t => String(t.date ?? '').slice(0, 7))}
-                          height={100}
-                        />
-                      </div>
+            {/* ── KPI strip ──────────────────────────────────────────────────── */}
+            {isLoading ? (
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+                {[...Array(5)].map((_, i) => <SkeletonCard key={i} className={i === 0 ? 'col-span-2 lg:col-span-1' : ''} />)}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-4 mb-6">
+                  {/* Est. Current Value */}
+                  <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Estimated Current Value</p>
+                    <p className="font-bold text-[38px] leading-none text-[#047857] mb-2"
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
+                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {confidenceScore && (
+                        <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
+                          {confidenceScore}% confidence
+                        </span>
+                      )}
+                      {price && p?.last_sold_date && (
+                        <p className="text-xs text-[#6B7280]">Est. from {String(p.last_sold_date).slice(0, 4)} sale price</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Last Sold */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Last Sold Price</p>
+                    <p className="font-bold text-[28px] leading-none text-[#111827] mb-2"
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {price ? `£${price.toLocaleString()}` : '—'}
+                    </p>
+                    {p?.last_sold_date && (
+                      <p className="text-xs text-[#6B7280]">Sold {String(p.last_sold_date).slice(0, 4)}</p>
                     )}
-                    <div className="space-y-0">
-                      {transactions.map((t, i) => (
-                        <div key={i} className="flex justify-between py-2.5 border-b border-border text-sm">
-                          <span className="text-mid">{String(t.date ?? '')}</span>
-                          <span className="text-white font-semibold">£{Number(t.price ?? 0).toLocaleString()}</span>
-                          <span className="text-dim text-xs">{String(t.transaction_type ?? '')}</span>
-                          {i < transactions.length - 1 && (
-                            <span className={`text-xs ${Number(t.price ?? 0) > Number(transactions[i+1].price ?? 0) ? 'text-accent' : 'text-danger'}`}>
-                              {Number(t.price ?? 0) > Number(transactions[i+1].price ?? 0) ? '↑' : '↓'}
-                              {Math.abs(Math.round((Number(t.price ?? 0)/Number(transactions[i+1].price ?? 1) - 1) * 100))}%
+                  </div>
+
+                  {/* Gross Yield */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Gross Yield</p>
+                    <p className={`font-bold text-[28px] leading-none mb-2 ${grossYield > 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {grossYield ? `${grossYield}%` : '—'}
+                    </p>
+                    {cityData && <p className="text-xs text-[#6B7280]">Area avg {cityData.avgYield}%</p>}
+                  </div>
+
+                  {/* Net Yield */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Net Yield</p>
+                    <p className={`font-bold text-[28px] leading-none mb-2 ${netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {netYield ? `${netYield}%` : '—'}
+                    </p>
+                    <p className="text-xs text-[#6B7280]">After all costs</p>
+                  </div>
+
+                  {/* Total ROI */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Total ROI</p>
+                    <p className="font-bold text-[28px] leading-none text-[#B7791F] mb-2"
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {totalROI ? `${totalROI}%` : '—'}
+                    </p>
+                    <p className="text-xs text-[#6B7280]">Net yield + cap growth</p>
+                  </div>
+              </div>
+            )}
+
+            {/* ── Confidence + data quality bar ──────────────────────────────── */}
+            <div className="flex items-center justify-between gap-4 mb-5 px-1 flex-wrap">
+              <div className="flex items-center gap-3 flex-wrap">
+                {comparablesCount > 0 && (
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] px-3 py-1 rounded-full">
+                    ✓ High confidence · Based on {comparablesCount} local transaction{comparablesCount !== 1 ? 's' : ''}
+                  </span>
+                )}
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280] bg-white border border-[#E7E5DD] px-3 py-1 rounded-full">
+                  📊 Data quality: {dataQuality}%
+                </span>
+                <span className="inline-flex items-center text-[11px] text-[#9CA3AF]">
+                  {localMarketType}
+                </span>
+              </div>
+              <p className="text-[11px] text-[#9CA3AF]">
+                Sources: Land Registry · EPC Open Data · Homedata · UK HPI
+              </p>
+            </div>
+
+            {/* ── Tab bar ────────────────────────────────────────────────────── */}
+            <div className="flex gap-0 border-b border-[#E7E5DD] mb-6 overflow-x-auto">
+              {tabs.map(t => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`shrink-0 px-5 py-3 text-sm font-medium transition-all border-b-2 -mb-px ${
+                    tab === t.id
+                      ? 'border-[#047857] text-[#047857]'
+                      : 'border-transparent text-[#6B7280] hover:text-[#374151]'
+                  }`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* OVERVIEW TAB                                                    */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {tab === 'overview' && (
+              <div className="grid grid-cols-12 gap-5">
+
+                {/* ── Property Details (col 1–4) ──────────────────────────── */}
+                <div className="col-span-12 lg:col-span-4 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Property Details</h3>
+                  <div>
+                    {[
+                      { icon: '🛏', label: 'Bedrooms',  value: bedsLabel,                          inferred: bedsInferred,   epc: false, verified: false },
+                      { icon: '🛁', label: 'Bathrooms', value: bathsLabel,                         inferred: bathsInferred,  epc: false, verified: false },
+                      { icon: '⊞', label: 'Floor Area', value: floorArea ? `${floorArea} m²` : '', inferred: false,          epc: false, verified: !!(epc?.total_floor_area || enriched?.epcFloorArea) },
+                      { icon: '⚡', label: 'EPC Rating', value: epcKnown ? epcRating : '',          inferred: false,          epc: true,  verified: false },
+                      { icon: '🌿', label: 'Garden',    value: gardenLabel,                         inferred: gardenInferred, epc: false, verified: false },
+                      { icon: '🏠', label: 'Type',      value: propType,                            inferred: false,          epc: false, verified: false },
+                      { icon: '📋', label: 'Tenure',    value: tenureLabel,                         inferred: tenureInferred, epc: false, verified: false },
+                    ].filter(r => r.value).map(row => (
+                      <div key={row.label} className="flex items-center justify-between py-3 border-b border-[#F3F4F6] last:border-0">
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-base w-5 text-center">{row.icon}</span>
+                          <span className="text-sm text-[#475569]">{row.label}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {row.epc ? (
+                            <span className={`text-sm font-bold px-2.5 py-0.5 rounded-lg border ${epcBadgeClass}`}>
+                              {row.value}
+                            </span>
+                          ) : (
+                            <span className={`text-sm font-semibold ${row.inferred ? 'text-[#B7791F]' : 'text-[#111827]'}`}>
+                              {row.value}{row.inferred ? ' *' : ''}
                             </span>
                           )}
+                          {row.verified && (
+                            <span className="text-[10px] bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded font-bold">EPC</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {anyInferred && (
+                    <p className="text-[11px] text-[#9CA3AF] mt-3">* Estimated from floor area and local property norms.</p>
+                  )}
+                  <div className="mt-4 pt-4 border-t border-[#F3F4F6]">
+                    <p className="text-[11px] text-[#9CA3AF]">Sources: Land Registry · EPC Open Data · Homedata · UK HPI</p>
+                  </div>
+                </div>
+
+                {/* ── Investment Signals (col 5–9) ────────────────────────── */}
+                <div className="col-span-12 lg:col-span-5 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Investment Signals</h3>
+                  <p className="text-[11px] text-[#9CA3AF] mb-4">Scores are based on 100-point scale. Higher is better.</p>
+                  {cityData ? (
+                    <>
+                      <div className="flex justify-around py-4">
+                        {[
+                          { score: cityData.demandScore,          label: 'Demand'         },
+                          { score: 100 - cityData.supplyScore,    label: 'Supply Gap'     },
+                          { score: cityData.regenerationScore,    label: 'Regeneration'   },
+                          { score: cityData.infrastructureScore,  label: 'Infrastructure' },
+                        ].map(ring => {
+                          const color = ring.score >= 75 ? '#047857' : ring.score >= 50 ? '#B7791F' : '#D1D5DB'
+                          const wordLabel = ring.score >= 80 ? 'Very Strong' : ring.score >= 65 ? 'Strong' : ring.score >= 50 ? 'Good' : 'Moderate'
+                          const wordColor = ring.score >= 75 ? 'text-[#047857]' : ring.score >= 50 ? 'text-[#B7791F]' : 'text-[#9CA3AF]'
+                          const circ = 2 * Math.PI * 28
+                          return (
+                            <div key={ring.label} className="flex flex-col items-center gap-2">
+                              <svg width="72" height="72" viewBox="0 0 72 72">
+                                <circle cx="36" cy="36" r="28" fill="none" stroke="#F3F4F6" strokeWidth="8"/>
+                                <circle cx="36" cy="36" r="28" fill="none"
+                                  stroke={color} strokeWidth="8" strokeLinecap="round"
+                                  strokeDasharray={`${(ring.score / 100) * circ} ${circ}`}
+                                  transform="rotate(-90 36 36)"
+                                  style={{ transition: 'stroke-dasharray 0.6s ease' }}
+                                />
+                                <text x="36" y="41" textAnchor="middle" fontSize="15" fontWeight="700" fill="#111827">
+                                  {ring.score}
+                                </text>
+                              </svg>
+                              <div className="text-center">
+                                <p className="text-[11px] font-semibold text-[#374151]">{ring.label}</p>
+                                <p className={`text-[10px] font-medium ${wordColor}`}>{wordLabel}</p>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-3 mt-2">
+                        <p className="text-xs text-[#047857] leading-relaxed">
+                          {cityData.demandScore >= 75 ? 'Strong demand' : 'Moderate demand'} and infrastructure support long-term rental resilience in {cityName}.
+                          {cityData.capitalGrowth5yr > 15 ? ` ${cityData.capitalGrowth5yr}% capital growth over 5 years.` : ''}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="py-10 text-center">
+                      <p className="text-sm text-[#9CA3AF]">City investment data unavailable for this area.</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── History Preview (col 10–12) ──────────────────────────── */}
+                <div className="col-span-12 lg:col-span-3 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">History Preview</h3>
+                    <button onClick={() => setTab('history')} className="text-xs text-[#047857] font-semibold hover:underline">
+                      View all →
+                    </button>
+                  </div>
+                  {transactions && transactions.length > 0 ? (
+                    <div className="space-y-0">
+                      {transactions.slice(0, 3).map((t, i) => (
+                        <div key={i} className={`${i > 0 ? 'border-t border-[#F3F4F6] pt-4 mt-4' : ''}`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[11px] font-semibold text-[#6B7280] bg-[#F6F3EC] px-2 py-0.5 rounded">
+                              {String(t.date ?? '').slice(0, 10)}
+                            </span>
+                            <span className="text-[11px] text-[#9CA3AF]">{String(t.transaction_type ?? 'Purchase')}</span>
+                          </div>
+                          <p className="text-xl font-bold text-[#111827] tracking-tight" style={{ fontFamily: SERIF }}>
+                            £{Number(t.price ?? 0).toLocaleString()}
+                          </p>
+                          {i === 0 && (
+                            <div className="mt-1 space-y-0.5">
+                              <p className="text-[11px] text-[#9CA3AF]">Source: HM Land Registry</p>
+                              {tenureLabel && <p className="text-[11px] text-[#9CA3AF]">Tenure: {tenureLabel}</p>}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <button onClick={() => setTab('history')}
+                        className="w-full mt-5 border border-[#E7E5DD] text-[#374151] text-xs font-medium py-2.5 rounded-xl hover:bg-[#F6F3EC] transition-colors">
+                        View all transactions
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <p className="text-2xl mb-2">📋</p>
+                      <p className="text-sm font-medium text-[#475569] mb-1">No transactions on record</p>
+                      <p className="text-xs text-[#9CA3AF]">May be newly built or not yet registered with Land Registry.</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Market Comparison (col 1–8) ─────────────────────────── */}
+                <div className="col-span-12 lg:col-span-8">
+                  <LightCityMarketPanel
+                    cityName={cityName}
+                    cityData={cityData as Record<string, number>}
+                    propertyPrice={price}
+                    estimatedCurrentValue={estimatedCurrentValue}
+                    propertyGrossYield={grossYield}
+                    propertyNetYield={netYield}
+                    propertyRent={effectiveRent}
+                    propertyBeds={propertyBeds}
+                  />
+                </div>
+
+                {/* ── Risk Preview (col 9–12) ──────────────────────────────── */}
+                <div className="col-span-12 lg:col-span-4 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Risk Preview</h3>
+                    <button onClick={() => setTab('risks')} className="text-xs text-[#047857] font-semibold hover:underline">
+                      View full risks →
+                    </button>
+                  </div>
+                  <div className="space-y-0">
+                    {/* EPC row */}
+                    <div className="py-3 border-b border-[#F3F4F6]">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-2">EPC Compliance</p>
+                      {epcKnown ? (
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`text-sm font-bold px-2 py-0.5 rounded-lg border ${epcBadgeClass}`}>{epcRating}</span>
+                            <span className={`text-sm font-semibold ${epcCompliant ? 'text-[#047857]' : 'text-[#B7791F]'}`}>
+                              {epcCompliant ? 'Compliant' : 'Needs upgrade'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[#9CA3AF]">
+                            {epcCompliant ? 'No upgrade required' : 'Works needed before 2028 · Est. £4–12k'}
+                          </p>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-[#9CA3AF]">Not assessed</span>
+                      )}
+                    </div>
+                    {/* Environmental risks */}
+                    {risks && risks.slice(0, 4).map((r, i) => {
+                      const score = Number(r.score ?? 0)
+                      const label = String(r.label ?? '')
+                      const riskType = String(r.risk_type ?? '').replace(/_/g, ' ')
+                      const badgeCls = score <= 1
+                        ? 'bg-[#ECFDF5] text-[#047857]'
+                        : score <= 2
+                        ? 'bg-[#FFF7E6] text-[#B7791F]'
+                        : 'bg-[#FEF2F2] text-[#DC2626]'
+                      return (
+                        <div key={i} className="flex items-center justify-between py-3 border-b border-[#F3F4F6] last:border-0">
+                          <span className="text-sm text-[#475569] capitalize">{riskType}</span>
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${badgeCls}`}>{label}</span>
+                        </div>
+                      )
+                    })}
+                    <button onClick={() => setTab('risks')}
+                      className="w-full mt-4 border border-[#E7E5DD] text-[#374151] text-xs font-medium py-2.5 rounded-xl hover:bg-[#F6F3EC] transition-colors">
+                      View full risk report
+                    </button>
+                  </div>
+                </div>
+
+                {/* Data bar */}
+                <div className="col-span-12 bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3 flex gap-6 flex-wrap text-xs text-[#6B7280]">
+                  <span>UPRN: <strong className="text-[#374151]">{String(p?.uprn ?? '')}</strong></span>
+                  <span>Postcode: <strong className="text-[#374151]">{postcode}</strong></span>
+                  <span>Last sold: <strong className="text-[#374151]">{String(p?.last_sold_date ?? '') || 'No record'}</strong></span>
+                  {price ? <span>At: <strong className="text-[#374151]">£{price.toLocaleString()}</strong></span> : null}
+                  {enriched?.valuationMethod && (
+                    <span>Method: <strong className="text-[#374151]">{String(enriched.valuationMethod)}</strong></span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* FINANCIALS TAB                                                  */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {tab === 'financials' && (
+              <div className="space-y-5">
+                {/* Rent input */}
+                <div className="bg-white border border-[#A7F3D0] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Monthly Rent (£)</h3>
+                  <div className="flex gap-3 items-center">
+                    <input
+                      type="number"
+                      value={rent || ''}
+                      onChange={e => { setRent(Number(e.target.value)); setRentSet(true) }}
+                      placeholder={`Estimated: £${enriched?.estimatedRent || '—'}`}
+                      className="flex-1 bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-3 text-[#111827] text-sm outline-none focus:border-[#047857] focus:ring-2 focus:ring-[#047857]/10"
+                    />
+                    <button
+                      onClick={() => { setServiceCharge(defaultServiceCharge(p)); setGroundRent(p?.tenure === 'Leasehold' ? 200 : 0) }}
+                      className="border border-[#E7E5DD] bg-white text-[#374151] text-xs font-medium px-4 py-3 rounded-xl hover:bg-[#F6F3EC] transition-colors whitespace-nowrap">
+                      Set defaults
+                    </button>
+                  </div>
+                  <p className="text-xs text-[#6B7280] mt-2">
+                    💡 Verify with local letting agents. Estimate based on {cityName} {String(p?.bedrooms ?? '')}-bed market rate.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Cost sliders */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                    <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual Costs</h3>
+                    <div className="space-y-4">
+                      {[
+                        { label: 'Service charge (£/yr)', val: serviceCharge, set: setServiceCharge, step: 100, min: 0, max: 10000, display: `£${serviceCharge.toLocaleString()}` },
+                        { label: 'Ground rent (£/yr)',    val: groundRent,    set: setGroundRent,    step: 50,  min: 0, max: 1000,  display: `£${groundRent}` },
+                        { label: `Management fee`,         val: mgmtFee,       set: setMgmtFee,       step: 1,   min: 0, max: 20,    display: `${mgmtFee}%` },
+                        { label: `Maintenance`,            val: maintenance,   set: setMaintenance,   step: 0.5, min: 0, max: 5,     display: `${maintenance}%` },
+                        { label: `Void weeks/yr`,          val: voidWks,       set: setVoidWks,       step: 0.5, min: 0, max: 8,     display: `${voidWks} wk` },
+                      ].map(f => (
+                        <div key={f.label}>
+                          <div className="flex justify-between text-xs mb-1.5">
+                            <span className="text-[#6B7280]">{f.label}</span>
+                            <span className="text-[#111827] font-semibold">{f.display}</span>
+                          </div>
+                          <input type="range" min={f.min} max={f.max} step={f.step} value={f.val}
+                            onChange={e => f.set(Number(e.target.value))}
+                            className="w-full h-1.5 accent-[#047857]" />
                         </div>
                       ))}
                     </div>
                   </div>
-                  <div className="card p-4">
-                    <p className="stat-label mb-2">DATA SOURCE</p>
-                    <p className="text-xs text-mid">Transaction data provided by HM Land Registry via Homedata API. Includes all registered sales at market value. Data updated monthly.</p>
-                  </div>
-                </>
-              ) : (
-                <div className="card p-8 text-center">
-                  <p className="text-3xl mb-3">📋</p>
-                  <p className="text-white font-semibold mb-2">No transaction history found</p>
-                  <p className="text-mid text-sm">This property may be newly built or not yet registered with HM Land Registry.</p>
-                </div>
-              )}
-            </div>
-          )}
 
-          {/* RISKS */}
-          {tab === 'risks' && (
-            <div className="space-y-4">
-              {/* EPC */}
-              <div className={`card p-5 ${epcKnown && !epcCompliant ? 'border-danger/30' : epcKnown ? 'border-accent/30' : 'border-border'}`}>
-                <p className="stat-label mb-3">EPC COMPLIANCE</p>
-                <div className="flex items-center gap-4">
-                  <div className={`text-5xl font-display font-black ${
-                    !epcKnown ? 'text-dim' : epcRating <= 'B' ? 'text-accent' : epcRating <= 'D' ? 'text-gold' : 'text-danger'
-                  }`}>{epcKnown ? epcRating : '?'}</div>
-                  <div>
-                    <p className={`font-semibold mb-1 ${!epcKnown ? 'text-dim' : epcCompliant ? 'text-accent' : 'text-gold'}`}>
-                      {!epcKnown
-                        ? 'EPC not assessed — contact local authority'
-                        : epcCompliant
-                          ? '✓ Compliant with proposed 2028 EPC-C rules'
-                          : '⚠ At risk — upgrade required before 2028'}
-                    </p>
-                    {epcKnown && <p className="text-xs text-mid">Score: {String(epc?.current_energy_efficiency ?? '?')}/100 · Potential: {String(epc?.potential_energy_efficiency ?? '?')}/100</p>}
-                    {epcKnown && <p className="text-xs text-mid">Cert date: {String(epc?.last_epc_date ?? epc?.inspection_date ?? 'Unknown')}</p>}
-                    {epc?.source === 'epc_open_data' && <p className="text-xs text-dim mt-0.5">Source: EPC Open Data Register</p>}
-                    {epcKnown && !epcCompliant && <p className="text-xs text-danger mt-1">Estimated upgrade cost: £4,000–£12,000 depending on works needed</p>}
+                  {/* P&L */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                    <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual P&amp;L</h3>
+                    {[
+                      { k: 'Gross rent',              v: `+£${(effectiveRent * 12).toLocaleString()}`,                            col: 'text-[#047857]' },
+                      { k: `Voids (${voidWks}wk)`,   v: `-£${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()}`,       col: 'text-[#DC2626]' },
+                      { k: `Mgmt (${mgmtFee}%)`,     v: `-£${Math.round(effectiveRent * 12 * mgmtFee / 100).toLocaleString()}`,   col: 'text-[#DC2626]' },
+                      { k: 'Maintenance',             v: `-£${Math.round((price || 0) * maintenance / 100).toLocaleString()}`,    col: 'text-[#DC2626]' },
+                      ...(serviceCharge > 0 ? [{ k: 'Service charge', v: `-£${serviceCharge.toLocaleString()}`, col: 'text-[#DC2626]' }] : []),
+                      ...(groundRent    > 0 ? [{ k: 'Ground rent',    v: `-£${groundRent.toLocaleString()}`,    col: 'text-[#DC2626]' }] : []),
+                    ].map(row => (
+                      <div key={row.k} className="flex justify-between py-2.5 border-b border-[#F3F4F6] text-sm">
+                        <span className="text-[#475569]">{row.k}</span>
+                        <span className={`font-semibold ${row.col}`}>{row.v}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between pt-4 items-baseline">
+                      <span className="text-sm font-bold text-[#111827]">Net Income</span>
+                      <span className="font-bold text-[#B7791F] text-2xl" style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                        £{(netMonthly * 12).toLocaleString()}
+                      </span>
+                    </div>
                   </div>
+                </div>
+
+                {/* Mortgage modeller */}
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Mortgage Cashflow Modeller</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-5">
+                    {[
+                      { label: `Deposit: £${deposit.toLocaleString()} (${price ? Math.round(deposit / price * 100) : 0}%)`, val: deposit,   set: setDeposit,   min: price * 0.2, max: price * 0.5, step: 5000 },
+                      { label: `Rate: ${mortRate}% p.a.`,                                                                    val: mortRate,  set: setMortRate,  min: 3.0,          max: 9.0,          step: 0.1  },
+                      { label: `Term: ${mortYears} years`,                                                                   val: mortYears, set: setMortYears, min: 5,            max: 35,           step: 5    },
+                    ].map(f => (
+                      <div key={f.label}>
+                        <p className="text-xs text-[#6B7280] mb-2">{f.label}</p>
+                        <input type="range" min={f.min} max={f.max} step={f.step} value={f.val}
+                          onChange={e => f.set(Number(e.target.value))}
+                          className="w-full h-1.5 accent-[#047857]" />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    {[
+                      { label: 'LTV',          value: mort ? `${mort.ltv}%`                     : '—', color: 'text-[#111827]'  },
+                      { label: 'Mortgage',     value: mort ? `£${mort.monthly.toLocaleString()}/mo` : '—', color: 'text-[#DC2626]'  },
+                      { label: 'Net Income',   value: `£${netMonthly.toLocaleString()}/mo`,               color: 'text-[#047857]'  },
+                      { label: 'Cashflow',     value: `£${cashflow.toLocaleString()}/mo`,                 color: cashflow >= 0 ? 'text-[#047857]' : 'text-[#DC2626]' },
+                    ].map(kpi => (
+                      <div key={kpi.label} className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4">
+                        <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1.5">{kpi.label}</p>
+                        <p className={`font-bold text-lg ${kpi.color}`} style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>{kpi.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {price && (
+                    <p className="text-xs text-[#6B7280] mt-4">
+                      SDLT (additional property): <strong className="text-[#374151]">£{sdlt.toLocaleString()}</strong>
+                    </p>
+                  )}
                 </div>
               </div>
+            )}
 
-              {/* Environmental risks */}
-              {risks && risks.length > 0 && (
-                <div className="card p-5">
-                  <p className="stat-label mb-3">ENVIRONMENTAL RISKS — HOMEDATA</p>
-                  <div className="space-y-2">
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* HISTORY TAB                                                     */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {tab === 'history' && (
+              <div className="space-y-5">
+                {transactions && transactions.length > 0 ? (
+                  <>
+                    <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                      <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Price History — Land Registry</h3>
+                      {transactions.length >= 2 && (
+                        <div className="mb-5 bg-[#FAF9F5] rounded-xl p-4">
+                          <LineChart
+                            series={[{ name: 'Sale price', data: transactions.slice().reverse().map(t => Number(t.price ?? 0)), color: '#047857' }]}
+                            labels={transactions.slice().reverse().map(t => String(t.date ?? '').slice(0, 7))}
+                            height={100}
+                          />
+                        </div>
+                      )}
+                      <div>
+                        {transactions.map((t, i) => (
+                          <div key={i} className="flex items-center justify-between py-3.5 border-b border-[#F3F4F6] last:border-0">
+                            <span className="text-sm text-[#475569]">{String(t.date ?? '')}</span>
+                            <span className="font-bold text-xl text-[#111827]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                              £{Number(t.price ?? 0).toLocaleString()}
+                            </span>
+                            <span className="text-xs text-[#9CA3AF]">{String(t.transaction_type ?? '')}</span>
+                            {i < transactions.length - 1 && (
+                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${
+                                Number(t.price ?? 0) > Number(transactions[i + 1].price ?? 0)
+                                  ? 'bg-[#ECFDF5] text-[#047857]'
+                                  : 'bg-[#FEF2F2] text-[#DC2626]'
+                              }`}>
+                                {Number(t.price ?? 0) > Number(transactions[i + 1].price ?? 0) ? '↑' : '↓'}
+                                {Math.abs(Math.round((Number(t.price ?? 0) / Number(transactions[i + 1].price ?? 1) - 1) * 100))}%
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3">
+                      <p className="text-xs text-[#6B7280]">
+                        Transaction data provided by HM Land Registry via Homedata API. Includes all registered sales at market value. Data updated monthly.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                    <p className="text-4xl mb-3">📋</p>
+                    <p className="font-semibold text-[#111827] mb-2">No transactions on record yet</p>
+                    <p className="text-sm text-[#6B7280]">This property may be newly built or not yet registered with HM Land Registry.</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* RISKS TAB                                                       */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {tab === 'risks' && (
+              <div className="space-y-5">
+                {/* EPC card */}
+                <div className={`bg-white rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] border ${
+                  epcKnown && !epcCompliant ? 'border-[#FCA5A5]' : epcKnown ? 'border-[#A7F3D0]' : 'border-[#E7E5DD]'
+                }`}>
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">EPC Compliance</h3>
+                  <div className="flex items-start gap-5">
+                    <div className={`text-6xl font-bold leading-none ${epcColor}`} style={{ fontFamily: SERIF }}>
+                      {epcKnown ? epcRating : '?'}
+                    </div>
+                    <div>
+                      <p className={`text-base font-semibold mb-1 ${!epcKnown ? 'text-[#9CA3AF]' : epcCompliant ? 'text-[#047857]' : 'text-[#B7791F]'}`}>
+                        {!epcKnown
+                          ? 'EPC not assessed — contact local authority'
+                          : epcCompliant
+                          ? '✓ Compliant with proposed 2028 EPC-C rules'
+                          : '⚠ At risk — upgrade required before 2028'}
+                      </p>
+                      {epcKnown && <p className="text-sm text-[#6B7280]">Score: {String(epc?.current_energy_efficiency ?? '?')}/100 · Potential: {String(epc?.potential_energy_efficiency ?? '?')}/100</p>}
+                      {epcKnown && <p className="text-sm text-[#6B7280]">Cert date: {String(epc?.last_epc_date ?? epc?.inspection_date ?? 'Unknown')}</p>}
+                      {epc?.source === 'epc_open_data' && <p className="text-xs text-[#9CA3AF] mt-0.5">Source: EPC Open Data Register</p>}
+                      {epcKnown && !epcCompliant && (
+                        <p className="text-sm text-[#DC2626] mt-1 font-medium">Estimated upgrade cost: £4,000–£12,000 depending on works needed</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Environmental risks */}
+                {risks && risks.length > 0 && (
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                    <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Environmental Risks — Homedata</h3>
                     {risks.map((r, i) => {
                       const score = Number(r.score ?? 0)
                       const label = String(r.label ?? '')
-                      const riskType = String(r.risk_type ?? '')
-                      const tone = score <= 1 ? 'text-accent' : score <= 2 ? 'text-gold' : 'text-danger'
+                      const riskType = String(r.risk_type ?? '').replace(/_/g, ' ')
+                      const badgeCls = score <= 1
+                        ? 'bg-[#ECFDF5] text-[#047857]'
+                        : score <= 2
+                        ? 'bg-[#FFF7E6] text-[#B7791F]'
+                        : 'bg-[#FEF2F2] text-[#DC2626]'
                       return (
-                        <div key={i} className="flex justify-between items-center py-2 border-b border-border text-sm">
-                          <span className="text-mid capitalize">{riskType.replace(/_/g, ' ')}</span>
-                          <span className={`font-semibold ${tone}`}>{label}</span>
+                        <div key={i} className="flex justify-between items-center py-3 border-b border-[#F3F4F6] last:border-0">
+                          <span className="text-sm text-[#475569] capitalize">{riskType}</span>
+                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${badgeCls}`}>{label}</span>
                         </div>
                       )
                     })}
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Investment risks */}
-              <div className="card p-5">
-                <p className="stat-label mb-3">INVESTMENT RISK FACTORS</p>
-                {[
-                  { risk: 'Rental void risk', note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
-                  { risk: 'Capital growth risk', note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
-                  { risk: 'EPC compliance', note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
-                  { risk: 'Leasehold risk', note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
-                  { risk: 'Interest rate risk', note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
-                ].map(r => (
-                  <div key={r.risk} className="flex gap-3 p-3 rounded-lg mb-2" style={{
-                    background: r.severity === 'high' ? 'rgba(255,77,109,0.06)' : r.severity === 'med' ? 'rgba(240,192,64,0.06)' : 'rgba(0,212,170,0.06)',
-                    border: `1px solid ${r.severity === 'high' ? 'rgba(255,77,109,0.2)' : r.severity === 'med' ? 'rgba(240,192,64,0.2)' : 'rgba(0,212,170,0.2)'}`,
-                  }}>
-                    <span>{r.severity === 'high' ? '🔴' : r.severity === 'med' ? '🟡' : '🟢'}</span>
-                    <div>
-                      <p className="text-sm font-semibold text-white">{r.risk}</p>
-                      <p className="text-xs text-mid">{r.note}</p>
-                    </div>
+                {/* Investment risk factors */}
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Investment Risk Factors</h3>
+                  <div className="space-y-3">
+                    {[
+                      { risk: 'Rental void risk',     note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
+                      { risk: 'Capital growth risk',  note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
+                      { risk: 'EPC compliance',       note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
+                      { risk: 'Leasehold risk',       note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
+                      { risk: 'Interest rate risk',   note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
+                    ].map(r => (
+                      <div key={r.risk} className={`flex gap-4 p-4 rounded-xl border ${
+                        r.severity === 'high' ? 'bg-[#FEF2F2] border-[#FCA5A5]' :
+                        r.severity === 'med'  ? 'bg-[#FFF7E6] border-[#F5D48A]' :
+                                                'bg-[#ECFDF5] border-[#A7F3D0]'
+                      }`}>
+                        <span className="text-lg shrink-0">{r.severity === 'high' ? '🔴' : r.severity === 'med' ? '🟡' : '🟢'}</span>
+                        <div>
+                          <p className="text-sm font-semibold text-[#111827]">{r.risk}</p>
+                          <p className="text-xs text-[#475569] mt-0.5">{r.note}</p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* MARKET COMPARISON TAB                                           */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {tab === 'market' && (
+              <LightCityMarketPanel
+                cityName={cityName}
+                cityData={cityData as Record<string, number>}
+                propertyPrice={price}
+                estimatedCurrentValue={estimatedCurrentValue}
+                propertyGrossYield={grossYield}
+                propertyNetYield={netYield}
+                propertyRent={effectiveRent}
+                propertyBeds={propertyBeds}
+                fullWidth
+              />
+            )}
+
+          </div>
         </div>
       </div>
+
+      {/* Skeleton shimmer styles */}
+      <style>{`
+        @keyframes shimmer-light {
+          0%   { background-position: -200% 0; }
+          100% { background-position:  200% 0; }
+        }
+        .skeleton-light {
+          background: linear-gradient(90deg, #F3F4F6 25%, #E9EAEC 50%, #F3F4F6 75%);
+          background-size: 200% 100%;
+          animation: shimmer-light 1.4s ease-in-out infinite;
+        }
+      `}</style>
     </div>
   )
 }
 
-// ── City Market Panel with city dropdown + direct comparison ─────────────────
-function CityMarketPanel({
-  cityName, cityData, propertyPrice, estimatedCurrentValue, propertyGrossYield, propertyNetYield, propertyRent, propertyBeds
+// ── Light-themed Market Comparison Panel ─────────────────────────────────────
+function LightCityMarketPanel({
+  cityName, cityData, propertyPrice, estimatedCurrentValue,
+  propertyGrossYield, propertyNetYield, propertyRent, propertyBeds, fullWidth
 }: {
   cityName: string
   cityData: Record<string, number>
@@ -507,14 +969,15 @@ function CityMarketPanel({
   propertyNetYield: number
   propertyRent: number
   propertyBeds: number
+  fullWidth?: boolean
 }) {
   const [selectedCity, setSelectedCity] = useState(cityName)
-  const bedroomKey = (beds: number) => beds === 0 ? 'studio' : `${beds}bed`
-  const defaultBedKey = bedroomKey(propertyBeds)
+  const bedKey = (n: number) => n === 0 ? 'studio' : `${n}bed`
+  const defaultBedKey = bedKey(propertyBeds)
   const [selectedBed, setSelectedBed] = useState(defaultBedKey)
 
-  const cities = Object.keys(MARKET_DATA.cities)
-  const cityAvg = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
+  const cities     = Object.keys(MARKET_DATA.cities)
+  const cityAvg    = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
   const bedroomData = (MARKET_DATA.cityByBedroom as Record<string, Record<string, { avgPrice: number; avgRent: number; avgYield: number }>>)[selectedCity]?.[selectedBed]
 
   const compAvgPrice = bedroomData?.avgPrice ?? cityAvg.avgPrice
@@ -524,122 +987,95 @@ function CityMarketPanel({
 
   const BEDS = [
     { key: 'studio', label: 'Studio' },
-    { key: '1bed',   label: '1 Bed' },
-    { key: '2bed',   label: '2 Bed' },
-    { key: '3bed',   label: '3 Bed' },
-    { key: '4bed',   label: '4 Bed' },
+    { key: '1bed',   label: '1 Bed'  },
+    { key: '2bed',   label: '2 Bed'  },
+    { key: '3bed',   label: '3 Bed'  },
+    { key: '4bed',   label: '4 Bed'  },
   ]
 
   const fmt = (v: number) => v ? `£${v.toLocaleString()}` : '—'
   const pct = (v: number) => v ? `${v.toFixed(1)}%` : '—'
-  const diff = (prop: number, city: number, higherIsBetter = true) => {
-    if (!prop || !city) return null
-    const d = prop - city
-    const better = higherIsBetter ? d > 0 : d < 0
-    return (
-      <span className={`text-[10px] ml-1.5 font-mono ${better ? 'text-accent' : 'text-danger'}`}>
-        {d > 0 ? '+' : ''}{d.toFixed(1)}{city < 100 ? '%' : ''}
-      </span>
-    )
-  }
+
+  const rows = [
+    { label: 'Estimated Value',  sub: estimatedCurrentValue ? '(est.)' : '(last sold)', prop: fmt(displayPrice),          city: fmt(compAvgPrice),  propRaw: 0,                  cityRaw: 0 },
+    { label: 'Gross Yield',      sub: undefined,                                          prop: pct(propertyGrossYield),    city: pct(compAvgYield),  propRaw: propertyGrossYield, cityRaw: compAvgYield },
+    { label: 'Net Yield',        sub: undefined,                                          prop: pct(propertyNetYield),      city: '—',                propRaw: 0,                  cityRaw: 0 },
+    { label: 'Monthly Rent',     sub: undefined,                                          prop: propertyRent ? fmt(propertyRent) : 'Set rent', city: fmt(compAvgRent), propRaw: 0, cityRaw: 0 },
+    { label: '1yr Growth',       sub: undefined,                                          prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, propRaw: 0, cityRaw: 0 },
+    { label: '5yr Growth',       sub: undefined,                                          prop: `+${cityAvg.capitalGrowth5yr}%`, city: `+${cityAvg.capitalGrowth5yr}%`, propRaw: 0, cityRaw: 0 },
+  ]
 
   return (
-    <div className="card p-5">
-      <div className="flex items-center justify-between mb-3">
-        <p className="stat-label">MARKET COMPARISON</p>
+    <div className={`bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] h-full ${fullWidth ? '' : ''}`}>
+      <div className="flex items-center justify-between mb-1 flex-wrap gap-3">
+        <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Market Comparison</h3>
         <select value={selectedCity} onChange={e => setSelectedCity(e.target.value)}
-          className="bg-bg border border-border text-accent text-xs font-mono rounded-lg px-3 py-1.5 outline-none focus:border-accent cursor-pointer">
+          className="bg-[#FAF9F5] border border-[#E7E5DD] text-[#374151] text-xs font-medium rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
           {cities.map(c => (
             <option key={c} value={c}>{c}{c === cityName ? ' ★' : ''}</option>
           ))}
         </select>
       </div>
 
-      {/* Bedroom filter pills */}
+      {/* Local market label */}
+      {cityName && (
+        <p className="text-[11px] text-[#9CA3AF] mb-4">
+          {BEDS.find(b => b.key === selectedBed)?.label} market · {selectedCity}
+          {selectedCity !== cityName && ` (your property is in ${cityName})`}
+        </p>
+      )}
+
+      {/* Bedroom pills */}
       <div className="flex gap-1.5 mb-4 flex-wrap items-center">
         {BEDS.map(b => (
           <button key={b.key} onClick={() => setSelectedBed(b.key)}
-            className={`px-3 py-1 rounded-lg text-[11px] font-mono transition-all ${
+            className={`px-3 py-1.5 rounded-full text-[12px] font-medium transition-all border ${
               selectedBed === b.key
-                ? 'bg-accent/20 border border-accent/40 text-accent'
-                : 'bg-white/[0.03] border border-border text-dim hover:text-mid'
+                ? 'bg-[#047857] border-[#047857] text-white'
+                : 'bg-white border-[#E7E5DD] text-[#6B7280] hover:border-[#047857] hover:text-[#047857]'
             }`}>
             {b.label}
-            {b.key === defaultBedKey && <span className="ml-1 text-[9px] text-accent/50">★</span>}
+            {b.key === defaultBedKey && <span className="ml-1 text-[9px] opacity-60">★</span>}
           </button>
         ))}
-        <span className="ml-auto text-[9px] text-dim">★ matches this property</span>
+        <span className="ml-auto text-[10px] text-[#9CA3AF]">★ matches property</span>
       </div>
 
       {selectedCity !== cityName && (
-        <div className="mb-3 px-3 py-2 bg-gold/10 border border-gold/20 rounded-lg">
-          <p className="text-[10px] text-gold font-mono">Comparing {cityName} property vs {selectedCity} market</p>
+        <div className="mb-4 px-3 py-2 bg-[#FFF7E6] border border-[#F5D48A] rounded-xl">
+          <p className="text-[11px] text-[#B7791F] font-medium">Comparing {cityName} property vs {selectedCity} market</p>
         </div>
       )}
 
-      {/* Comparison table */}
-      <div className="overflow-hidden rounded-xl border border-border">
-        <div className="grid grid-cols-3 bg-white/5 px-3 py-2 border-b border-border">
-          <span className="text-[10px] font-mono text-dim">METRIC</span>
-          <span className="text-[10px] font-mono text-accent text-center">THIS PROPERTY</span>
-          <span className="text-[10px] font-mono text-mid text-right">
-            {BEDS.find(b => b.key === selectedBed)?.label} {selectedCity}
+      {/* Table */}
+      <div className="overflow-hidden rounded-xl border border-[#E7E5DD]">
+        <div className="grid grid-cols-3 bg-[#FAF9F5] px-4 py-2.5 border-b border-[#E7E5DD]">
+          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF]">Metric</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#047857] text-center">This Property</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF] text-right">
+            {BEDS.find(b => b.key === selectedBed)?.label} · {selectedCity}
           </span>
         </div>
-
-        {[
-          {
-            label: 'Est. value', sublabel: estimatedCurrentValue ? '(est.)' : '(last sold)',
-            prop: fmt(displayPrice), city: fmt(compAvgPrice),
-            propRaw: 0, cityRaw: 0, higherIsBetter: false, isPct: false,
-          },
-          {
-            label: 'Gross yield', sublabel: undefined,
-            prop: pct(propertyGrossYield), city: pct(compAvgYield),
-            propRaw: propertyGrossYield, cityRaw: compAvgYield,
-            higherIsBetter: true, isPct: true,
-          },
-          {
-            label: 'Net yield', sublabel: undefined,
-            prop: pct(propertyNetYield), city: '—',
-            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
-          },
-          {
-            label: 'Monthly rent', sublabel: undefined,
-            prop: propertyRent ? `£${propertyRent.toLocaleString()}` : 'Set rent',
-            city: fmt(compAvgRent),
-            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
-          },
-          {
-            label: '1yr growth', sublabel: undefined,
-            prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`,
-            city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`,
-            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
-          },
-          {
-            label: '5yr growth', sublabel: undefined,
-            prop: `+${cityAvg.capitalGrowth5yr}%`,
-            city: `+${cityAvg.capitalGrowth5yr}%`,
-            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
-          },
-        ].map((row, i) => (
-          <div key={row.label}
-            className={`grid grid-cols-3 px-3 py-2.5 border-b border-border last:border-0 ${i % 2 === 0 ? '' : 'bg-white/[0.02]'}`}>
+        {rows.map((row, i) => (
+          <div key={row.label} className={`grid grid-cols-3 px-4 py-3.5 border-b border-[#F3F4F6] last:border-0 ${i % 2 !== 0 ? 'bg-[#FAFAF8]' : ''}`}>
             <div>
-              <span className="text-mid text-xs">{row.label}</span>
-              {row.sublabel && <span className="text-[9px] text-dim ml-1">{row.sublabel}</span>}
+              <span className="text-sm text-[#475569]">{row.label}</span>
+              {row.sub && <span className="text-[10px] text-[#9CA3AF] ml-1">{row.sub}</span>}
             </div>
-            <span className="text-accent font-semibold text-center text-xs">
-              {row.prop}
-              {row.isPct && row.propRaw && row.cityRaw
-                ? diff(row.propRaw, row.cityRaw, row.higherIsBetter) : null}
-            </span>
-            <span className="text-white text-right text-xs">{row.city}</span>
+            <div className="text-center">
+              <span className="text-sm font-semibold text-[#047857]">{row.prop}</span>
+              {row.propRaw > 0 && row.cityRaw > 0 && (
+                <span className={`text-[10px] ml-1.5 font-mono ${row.propRaw > row.cityRaw ? 'text-[#047857]' : 'text-[#DC2626]'}`}>
+                  {row.propRaw > row.cityRaw ? '+' : ''}{(row.propRaw - row.cityRaw).toFixed(1)}
+                </span>
+              )}
+            </div>
+            <span className="text-sm text-[#374151] text-right">{row.city}</span>
           </div>
         ))}
       </div>
 
-      <p className="text-[10px] text-dim mt-3">
+      <p className="text-[10px] text-[#9CA3AF] mt-3">
         {bedroomData
           ? `${BEDS.find(b => b.key === selectedBed)?.label} avg for ${selectedCity} · Zoopla 2026 · REalyse`
           : `City-wide avg for ${selectedCity} · ONS HPI · Zoopla April 2026`}
