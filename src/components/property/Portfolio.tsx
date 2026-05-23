@@ -1,19 +1,59 @@
 'use client'
 
 import { Stat, Sparkline, SectionHeader } from '@/components/ui'
-import { calcGrossYield, calcNetYield, calcNetMonthlyIncome } from '@/lib/market-data'
 
 interface PortfolioProps {
   portfolio: Record<string, unknown>[]
   onRemove: (uprn: string) => void
   onAI: (p: null) => void
+  onSelectProperty: (item: Record<string, unknown>) => void
 }
 
-export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
-  const totalValue = portfolio.reduce((s, item) => {
-    const p = item.property as Record<string, unknown>
-    return s + ((p?.last_sold_price as number) || 0)
-  }, 0)
+// EPC resolver — epc register data first, then enriched, then property record
+function resolveEpcRating(item: Record<string, unknown>): { rating: string; known: boolean } {
+  const epc      = item.epc      as Record<string, unknown> | null | undefined
+  const enriched = item.enriched as Record<string, unknown> | undefined
+  const property = item.property as Record<string, unknown> | undefined
+
+  const raw = String(
+    epc?.current_energy_rating ||
+    epc?.currentEnergyRating ||
+    epc?.rating ||
+    epc?.energy_rating ||
+    enriched?.epcRating ||
+    enriched?.current_energy_rating ||
+    property?.current_energy_rating ||
+    property?.epc_rating ||
+    ''
+  ).trim().toUpperCase()
+
+  const match = raw.match(/[A-G]/)
+  const rating = match?.[0] || '?'
+  return { rating, known: rating !== '?' }
+}
+
+// Value resolver — estimatedCurrentValue first, last_sold_price as final fallback
+function resolveEstimatedCurrentValue(item: Record<string, unknown>): number {
+  const enriched = item.enriched as Record<string, unknown> | undefined
+  const property = item.property as Record<string, unknown> | undefined
+
+  const candidates = [
+    enriched?.estimatedCurrentValue,
+    (item as Record<string, unknown>).estimatedCurrentValue,
+    property?.estimated_current_value,
+  ]
+
+  for (const v of candidates) {
+    const n = Number(v)
+    if (Number.isFinite(n) && n > 0) return Math.round(n)
+  }
+
+  const fallback = Number(property?.last_sold_price || 0)
+  return Number.isFinite(fallback) ? fallback : 0
+}
+
+export function Portfolio({ portfolio, onRemove, onAI, onSelectProperty }: PortfolioProps) {
+  const totalValue = portfolio.reduce((s, item) => s + resolveEstimatedCurrentValue(item), 0)
 
   const totalNetMonthly = portfolio.reduce((s, item) => {
     const enriched = item.enriched as Record<string, unknown>
@@ -33,6 +73,11 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
         return s + ((enriched?.netYield as number) || 0)
       }, 0) / portfolio.length
     : 0
+
+  const nonCompliantCount = portfolio.filter(item => {
+    const { rating, known } = resolveEpcRating(item)
+    return known && rating > 'C'
+  }).length
 
   return (
     <div>
@@ -68,20 +113,24 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
       ) : (
         <div className="space-y-3">
           {portfolio.map((item, i) => {
-            const p = item.property as Record<string, unknown>
+            const p        = item.property as Record<string, unknown>
             const enriched = item.enriched as Record<string, unknown>
             const transactions = item.transactions as Array<Record<string, unknown>> | undefined
-            const uprn = String(p?.uprn)
-            const addr = (p?.full_address || p?.address) as string
-            const price = (p?.last_sold_price as number) || 0
+            const uprn     = String(p?.uprn)
+            const addr     = (p?.full_address || p?.address) as string
+            const value    = resolveEstimatedCurrentValue(item)
             const netMonthly = (enriched?.netMonthly as number) || 0
-            const netYield = (enriched?.netYield as number) || 0
-            const totalROI = (enriched?.totalROI as number) || 0
-            const epcRating = (enriched?.epcRating || p?.current_energy_rating || '?') as string
-            const cityName = item.cityName as string
+            const netYield   = (enriched?.netYield   as number) || 0
+            const totalROI   = (enriched?.totalROI   as number) || 0
+            const cityName   = item.cityName as string
+            const { rating: epcRating, known: epcKnown } = resolveEpcRating(item)
 
             return (
-              <div key={i} className="card p-4 hover:border-mid transition-colors">
+              <div
+                key={i}
+                className="card p-4 hover:border-mid transition-colors cursor-pointer"
+                onClick={() => onSelectProperty(item)}
+              >
                 <div className="flex items-center gap-4 flex-wrap">
                   {/* Address */}
                   <div className="flex-1 min-w-[200px]">
@@ -93,7 +142,7 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
                   <div className="flex gap-4 text-center">
                     <div>
                       <p className="text-[9px] font-mono text-dim">VALUE</p>
-                      <p className="text-sm font-bold text-white">£{(price/1000).toFixed(0)}k</p>
+                      <p className="text-sm font-bold text-white">£{(value/1000).toFixed(0)}k</p>
                     </div>
                     <div>
                       <p className="text-[9px] font-mono text-dim">NET YIELD</p>
@@ -109,8 +158,12 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
                     </div>
                     <div>
                       <p className="text-[9px] font-mono text-dim">EPC</p>
-                      <p className={`text-sm font-bold ${epcRating <= 'C' ? 'text-accent' : epcRating === 'D' ? 'text-gold' : 'text-danger'}`}>
-                        {epcRating}
+                      <p className={`text-sm font-bold ${
+                        !epcKnown ? 'text-dim' :
+                        epcRating <= 'C' ? 'text-accent' :
+                        epcRating === 'D' ? 'text-gold' : 'text-danger'
+                      }`}>
+                        {epcKnown ? epcRating : '—'}
                       </p>
                     </div>
                   </div>
@@ -127,9 +180,11 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
                     </div>
                   )}
 
-                  {/* Remove */}
-                  <button onClick={() => onRemove(uprn)}
-                    className="text-dim hover:text-danger text-xs border border-border rounded-lg px-2.5 py-1.5 transition-colors">
+                  {/* Remove — stopPropagation so row click doesn't fire */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onRemove(uprn) }}
+                    className="text-dim hover:text-danger text-xs border border-border rounded-lg px-2.5 py-1.5 transition-colors"
+                  >
                     ✕
                   </button>
                 </div>
@@ -144,8 +199,8 @@ export function Portfolio({ portfolio, onRemove, onAI }: PortfolioProps) {
               {portfolio.length} properties · Total value £{(totalValue/1000).toFixed(0)}k ·
               Annual net income £{(totalNetMonthly * 12).toLocaleString()} ·
               Avg ROI {avgROI.toFixed(1)}% ·
-              {portfolio.filter(item => ((item.enriched as Record<string, unknown>)?.epcRating as string) > 'C').length > 0
-                ? ` ⚠ ${portfolio.filter(item => ((item.enriched as Record<string, unknown>)?.epcRating as string) > 'C').length} properties need EPC upgrade before 2028`
+              {nonCompliantCount > 0
+                ? ` ⚠ ${nonCompliantCount} properties need EPC upgrade before 2028`
                 : ' ✓ All properties EPC-C compliant'}
             </p>
           </div>
