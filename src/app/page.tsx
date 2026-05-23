@@ -37,11 +37,8 @@ export default function Home() {
     <>
       <Navbar tab={tab} setTab={setTab} onAI={() => openAI(null)} portfolioCount={portfolio.length} />
 
-      <div className={`transition-all duration-300 ${selectedProperty ? 'group relative' : ''}`}>
-        <div className={selectedProperty ? 'opacity-0 group-hover:opacity-100 transition-opacity duration-200' : ''}>
-          <HeroStats marketData={MARKET_DATA} />
-        </div>
-      </div>
+      {/* Hide hero when property panel is open so address is fully visible */}
+      {!selectedProperty && <HeroStats marketData={MARKET_DATA} />}
 
       <main className="max-w-[1320px] mx-auto px-6 py-8">
         {tab === 'search' && (
@@ -63,7 +60,6 @@ export default function Home() {
               (p.property as Record<string, unknown>)?.uprn !== uprn
             ))}
             onAI={openAI}
-            onSelectProperty={setSelectedProperty}
           />
         )}
 
