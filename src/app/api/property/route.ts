@@ -310,6 +310,7 @@ function inferBedroomsFromArea(area: number, propertyType: string): { beds: numb
     if (area < 130) return { beds: 4, confidence: 72 }
     return          { beds: 5, confidence: 65 }
   }
+  // detached
   if (area < 120) return { beds: 4, confidence: 65 }
   if (area < 160) return { beds: 5, confidence: 65 }
   return          { beds: 6, confidence: 60 }
@@ -353,6 +354,7 @@ function enrichAttributes(
   const statedTenure = String(prop.tenure || '').trim()
   const statedGarden = prop.has_garden
 
+  // ── Bedrooms ────────────────────────────────────────────────────────────────
   let beds = statedBeds
   let bedroomsLabel      = beds != null ? String(beds) : 'Unknown'
   let bedroomsConfidence = 100
@@ -374,6 +376,7 @@ function enrichAttributes(
     }
   }
 
+  // ── Bathrooms ────────────────────────────────────────────────────────────────
   let bathrooms      = statedBaths
   let bathroomsLabel = statedBaths != null ? String(statedBaths) : 'Unknown'
   let bathroomsInferred = false
@@ -384,11 +387,13 @@ function enrichAttributes(
     if      (area < 70)  inf = 1
     else if (area < 120) inf = t === 'flat' ? 1 : 2
     else                 inf = t === 'flat' ? 2 : t === 'detached' ? 3 : 2
+
     bathrooms      = inf
     bathroomsLabel = `Est. ${inf}`
     bathroomsInferred = true
   }
 
+  // ── Tenure ────────────────────────────────────────────────────────────────
   let tenureLabel   = statedTenure || 'Unknown'
   let tenureInferred = false
 
@@ -405,6 +410,7 @@ function enrichAttributes(
     tenureInferred = true
   }
 
+  // ── Garden ────────────────────────────────────────────────────────────────
   let hasGarden: boolean | null = statedGarden === true ? true : statedGarden === false ? false : null
   let gardenLabel   = hasGarden === true ? 'Yes' : hasGarden === false ? 'No' : 'Unknown'
   let gardenInferred = false
@@ -444,7 +450,7 @@ const LA_HPI: Record<string, LaHpi> = {
   'UB': { la:'Hillingdon',   det: 5.0, semi: 6.0, ter: 7.0, flat: 2.0 },
   'SM': { la:'Sutton',       det: 4.0, semi: 5.0, ter: 6.0, flat: 1.5 },
   'WD': { la:'Watford',      det: 6.0, semi: 7.0, ter: 8.0, flat: 2.5 },
-  // Inner London — specific districts (lookup tries most specific first)
+  // Inner London — specific districts
   'N16': { la:'Stoke Newington',  det:22.0, semi:21.0, ter:20.0, flat: 3.0 },
   'N1':  { la:'Islington',        det:17.0, semi:16.0, ter:15.0, flat: 2.0 },
   'N4':  { la:'Finsbury Park',    det:18.0, semi:17.0, ter:16.0, flat: 2.5 },
@@ -464,7 +470,7 @@ const LA_HPI: Record<string, LaHpi> = {
   'NW1': { la:'Camden',           det:14.0, semi:13.0, ter:12.0, flat: 1.5 },
   'NW3': { la:'Hampstead',        det:12.0, semi:11.0, ter:10.0, flat: 1.0 },
   'NW5': { la:'Kentish Town',     det:15.0, semi:14.0, ter:13.0, flat: 1.5 },
-  // Inner London — generic prefix fallbacks (houses up 15-18% over 5yr, flats flat/declining)
+  // Inner London — generic prefix fallbacks
   'E':  { la:'East London',  det:18.0, semi:17.0, ter:16.0, flat: 3.0 },
   'N':  { la:'North London', det:17.0, semi:16.0, ter:15.0, flat: 2.0 },
   'SW': { la:'South West',   det:13.0, semi:12.0, ter:11.0, flat: 0.5 },
@@ -490,7 +496,6 @@ interface CalibBand {
   anchors: Partial<Record<'studio'|'1bed'|'2bed'|'3bed'|'4bed', { min:number; max:number }>>
 }
 const CALIBRATION: Record<string, CalibBand> = {
-  // Inner London — houses command £7,000–10,000+ /sqm in prime areas
   'N16': { psqmMin:7000, psqmMax:9500,  anchors:{'2bed':{min:620000,max:800000},'3bed':{min:750000,max:960000},'4bed':{min:860000,max:1100000}} },
   'N1':  { psqmMin:8000, psqmMax:11000, anchors:{'2bed':{min:750000,max:950000},'3bed':{min:900000,max:1150000},'4bed':{min:1050000,max:1400000}} },
   'N4':  { psqmMin:7000, psqmMax:9500,  anchors:{'2bed':{min:620000,max:800000},'3bed':{min:750000,max:960000},'4bed':{min:870000,max:1100000}} },
@@ -505,7 +510,6 @@ const CALIBRATION: Record<string, CalibBand> = {
   'NW1': { psqmMin:7000, psqmMax:9500,  anchors:{'2bed':{min:600000,max:780000},'3bed':{min:730000,max:940000},'4bed':{min:860000,max:1100000}} },
   'NW3': { psqmMin:8000, psqmMax:11000, anchors:{'3bed':{min:900000,max:1200000},'4bed':{min:1100000,max:1500000}} },
   'NW5': { psqmMin:7000, psqmMax:9500,  anchors:{'2bed':{min:600000,max:780000},'3bed':{min:730000,max:940000}} },
-  // Outer London
   'EN1': { psqmMin:4500, psqmMax:5800, anchors:{'2bed':{min:340000,max:420000},'3bed':{min:450000,max:560000},'4bed':{min:580000,max:700000}} },
   'EN2': { psqmMin:4800, psqmMax:6200, anchors:{'2bed':{min:370000,max:460000},'3bed':{min:490000,max:600000},'4bed':{min:620000,max:760000}} },
   'EN3': { psqmMin:4200, psqmMax:5600, anchors:{'2bed':{min:300000,max:380000},'3bed':{min:430000,max:530000},'4bed':{min:550000,max:670000}} },
@@ -664,6 +668,7 @@ async function calcValuation(
   const calib  = getCalibration(outcode)
   const anchor = calib ? getAnchor(calib, subjectBeds) : null
 
+  // ── L1: COMPARABLE ENGINE ────────────────────────────────────────────────────
   let l1Value: number | null = null
   let l1Comps = 0
   let l1StrongComps = 0
@@ -705,6 +710,7 @@ async function calcValuation(
     }
   }
 
+  // ── L2: DISTRICT TRENDS ───────────────────────────────────────────────────────
   let l2Value: number | null = null
 
   if (outcode) {
@@ -733,18 +739,20 @@ async function calcValuation(
     }
   }
 
+  // ── L3: LA HPI CALIBRATION ────────────────────────────────────────────────────
   let l3Value: number | null = null
 
   if (lastSoldPrice > 0 && lastSoldDate) {
     const laGrowth5yr = getLaHpiGrowth(outcode, subjectType)
     if (laGrowth5yr != null) {
-      const soldYear     = Number(lastSoldDate.slice(0, 4))
-      const yearsHeld    = Math.max(0, 2026 - soldYear)
+      const soldYear    = Number(lastSoldDate.slice(0, 4))
+      const yearsHeld   = Math.max(0, 2026 - soldYear)
       const annualLaRate = laGrowth5yr / 5 / 100
       l3Value = Math.round(lastSoldPrice * Math.pow(1 + annualLaRate, yearsHeld) * featureAdj)
     }
   }
 
+  // ── L4: CITY FALLBACK ─────────────────────────────────────────────────────────
   let l4Value: number | null = null
 
   const cityByBed  = MARKET_DATA.cityByBedroom[cityName as keyof typeof MARKET_DATA.cityByBedroom]
@@ -755,7 +763,6 @@ async function calcValuation(
   if (cityName === 'London' && cityBedAvg > 0) {
     const outerFar   = ['EN','RM','DA','IG']
     const outerMid   = ['CR','BR','KT','TW','UB','HA','WD','SM']
-    // Gentrified inner London districts trade well above the all-London average
     const innerPrime = ['N1','N4','N5','N6','N7','N8','N16','E1','E2','E3','E8','E9',
                         'SW1','SW3','SW6','SW7','SW10','W1','W2','W8','W11',
                         'SE1','SE5','SE15','SE22','SE24','NW1','NW3','NW5']
@@ -767,13 +774,14 @@ async function calcValuation(
 
   if (cityBedAvg > 0) l4Value = Math.round(cityBedAvg * featureAdj)
 
+  // ── DYNAMIC WEIGHT REDISTRIBUTION ────────────────────────────────────────────
   const l1Weight = l1StrongComps >= 3 ? 0.75 : l1StrongComps >= 2 ? 0.60 : 0.50
 
   const layers = [
-    { val: l1Value, w: l1Weight },
-    { val: l2Value, w: 0.20    },
-    { val: l3Value, w: 0.20    },
-    { val: l4Value, w: 0.10    },
+    { val: l1Value, w: l1Weight   },
+    { val: l2Value, w: 0.20       },
+    { val: l3Value, w: 0.20       },
+    { val: l4Value, w: 0.10       },
   ].filter(l => l.val !== null && l.val > 0) as { val: number; w: number }[]
 
   if (layers.length === 0) {
@@ -833,6 +841,7 @@ function estimateFloorArea(beds: number, type: string): number {
   return area
 }
 
+// ── EPC OPEN DATA ─────────────────────────────────────────────────────────────
 interface EpcResult {
   floorAreas: Map<string, number>
   subjectEpc: Record<string, unknown> | null
@@ -865,14 +874,14 @@ async function fetchEpcData(
     const rows = (data.rows || []) as string[][]
 
     const col = (name: string) => cols.indexOf(name)
-    const addrIdx   = col('address1')
-    const areaIdx   = col('total-floor-area')
-    const ratingIdx = col('current-energy-rating')
-    const scoreIdx  = col('current-energy-efficiency')
-    const potRatIdx = col('potential-energy-rating')
-    const potScoIdx = col('potential-energy-efficiency')
-    const dateIdx   = col('lodgement-date')
-    const inspIdx   = col('inspection-date')
+    const addrIdx    = col('address1')
+    const areaIdx    = col('total-floor-area')
+    const ratingIdx  = col('current-energy-rating')
+    const scoreIdx   = col('current-energy-efficiency')
+    const potRatIdx  = col('potential-energy-rating')
+    const potScoIdx  = col('potential-energy-efficiency')
+    const dateIdx    = col('lodgement-date')
+    const inspIdx    = col('inspection-date')
 
     const subjectToken = subjectAddress.trim().split(/[\s,]/)[0].toLowerCase().replace(/\D/g, '') ||
                          subjectAddress.trim().split(/[\s,]/)[0].toLowerCase()
@@ -884,119 +893,4 @@ async function fetchEpcData(
     for (const row of rows) {
       const addr = String(row[addrIdx] || '').trim()
       const area = Number(row[areaIdx] || 0)
-      if (!addr) continue
-      const key = addr.split(/[\s,]/)[0].toLowerCase()
-      if (area > 0) floorAreas.set(key, area)
-      const rowToken  = key.replace(/\D/g, '') || key
-      const isSubject = subjectToken && (rowToken === subjectToken || key === subjectToken)
-      const rowDate   = String(row[dateIdx] || row[inspIdx] || '')
-      if (isSubject && (!subjectEpc || rowDate > subjectEpcDate)) {
-        subjectEpcDate = rowDate
-        subjectEpc = {
-          current_energy_rating:       String(row[ratingIdx] || ''),
-          current_energy_efficiency:   Number(row[scoreIdx]  || 0),
-          potential_energy_rating:     String(row[potRatIdx] || ''),
-          potential_energy_efficiency: Number(row[potScoIdx] || 0),
-          total_floor_area:            area,
-          inspection_date:             rowDate,
-          source:                      'epc_open_data',
-        }
-      }
-    }
-
-    console.log(`EPC: ${floorAreas.size} floor areas, subject matched: ${!!subjectEpc}`)
-    return { floorAreas, subjectEpc }
-  } catch (e) {
-    console.error('EPC fetch error:', e)
-    return empty
-  }
-}
-
-interface LrTransaction {
-  price:   number
-  date:    string
-  type:    string
-  address: string
-}
-
-function abortAfter(ms: number): AbortSignal {
-  const ctrl = new AbortController()
-  setTimeout(() => ctrl.abort(), ms)
-  return ctrl.signal
-}
-
-async function fetchLrData(
-  postcode: string,
-  address: string,
-): Promise<{ history: LrTransaction[]; comps: LrTransaction[] }> {
-  const empty = { history: [], comps: [] }
-  if (!postcode) return empty
-
-  try {
-    const url = `https://landregistry.data.gov.uk/data/ppi/address.json?postcode=${encodeURIComponent(postcode)}&_pageSize=50`
-    const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' })
-    if (!res.ok) return empty
-
-    const data      = await res.json()
-    const addresses: Record<string, unknown>[] = (data?.result as Record<string, unknown>)?.items || []
-    console.log(`LR: ${addresses.length} addresses in ${postcode}`)
-
-    const houseNumber = address.trim().split(' ')[0].replace(/\D/g, '')
-    const twoYearsAgo = new Date(Date.now() - 730 * 24 * 3600 * 1000).toISOString().slice(0, 10)
-
-    const fetchAddrTxns = async (addr: Record<string, unknown>): Promise<{ paon: string; isSubject: boolean; txns: LrTransaction[] }> => {
-      const paon    = String(addr.paon || '')
-      const addrUrl = String(addr._about || '').replace(/^http:\/\//i, 'https://')
-      const isSubject = Boolean(houseNumber && paon && paon.includes(houseNumber))
-      if (!addrUrl) return { paon, isSubject, txns: [] }
-
-      try {
-        const txRes = await fetch(`${addrUrl}.json`, {
-          headers: { Accept: 'application/json' },
-          cache: 'no-store',
-          signal: abortAfter(7000),
-        })
-        if (!txRes.ok) return { paon, isSubject, txns: [] }
-
-        const txData   = await txRes.json()
-        const topic    = (txData?.result as Record<string, unknown>)?.primaryTopic as Record<string, unknown>
-        const rawDates = topic?.soldDate
-        if (!rawDates) return { paon, isSubject, txns: [] }
-
-        const list = Array.isArray(rawDates) ? rawDates : [rawDates]
-        const txns: LrTransaction[] = list
-          .filter(Boolean)
-          .map((tx: unknown) => ({
-            price:   Number((tx as Record<string, unknown>).pricePaid || 0),
-            date:    String((tx as Record<string, unknown>).transactionDate || ''),
-            type:    String((tx as Record<string, unknown>).propertyType || '').split('/').pop() || '',
-            address: paon,
-          }))
-          .filter(t => t.price > 0)
-
-        return { paon, isSubject, txns }
-      } catch {
-        return { paon, isSubject, txns: [] }
-      }
-    }
-
-    const settled = await Promise.allSettled(addresses.slice(0, 25).map(fetchAddrTxns))
-    const history: LrTransaction[] = []
-    const comps:   LrTransaction[] = []
-
-    for (const r of settled) {
-      if (r.status !== 'fulfilled') continue
-      const { isSubject, txns } = r.value
-      if (isSubject) history.push(...txns)
-      else           comps.push(...txns.filter(t => t.date >= twoYearsAgo))
-    }
-
-    history.sort((a, b) => b.date.localeCompare(a.date))
-    console.log(`LR: ${history.length} subject txns, ${comps.length} postcode comps (last 24mo)`)
-
-    return { history, comps }
-  } catch (e) {
-    console.error('LR data error:', e)
-    return empty
-  }
-}
+      if (!addr
