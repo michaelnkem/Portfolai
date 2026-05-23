@@ -12,7 +12,7 @@ export const MARKET_DATA = {
     ukHpi1yr: 1.2,
     londonHpi1yr: -3.3,
     northernCitiesHpi1yr: 4.5,
-    sdltSurcharge: 5, // % additional for BTL/2nd home as of Oct 2024
+    sdltSurcharge: 5,
   },
   cities: {
     Manchester: {
@@ -72,9 +72,6 @@ export const MARKET_DATA = {
       highlight: 'Safe haven — liquidity & global demand',
     },
   },
-  // Bedroom-level market data per city
-  // Sources: Zoopla Rental Market Report 2026, Rightmove HPI, ONS PIPR, REalyse
-  // Price = avg asking/achieved. Rent = avg monthly PCM. Yield = gross rental yield.
   cityByBedroom: {
     Manchester: {
       studio: { avgPrice: 130000, avgRent: 850,  avgYield: 7.8 },
@@ -126,14 +123,13 @@ export const MARKET_DATA = {
       '4bed':  { avgPrice: 580000, avgRent: 2800, avgYield: 5.8 },
     },
     London: {
-      studio: { avgPrice: 320000, avgRent: 1800, avgYield: 6.8 },
-      '1bed':  { avgPrice: 430000, avgRent: 2200, avgYield: 6.1 },
-      '2bed':  { avgPrice: 590000, avgRent: 2850, avgYield: 5.8 },
-      '3bed':  { avgPrice: 780000, avgRent: 3500, avgYield: 5.4 },
-      '4bed':  { avgPrice: 1100000, avgRent: 4800, avgYield: 5.2 },
+      studio: { avgPrice: 280000, avgRent: 1600, avgYield: 6.9 },
+      '1bed':  { avgPrice: 390000, avgRent: 2050, avgYield: 6.3 },
+      '2bed':  { avgPrice: 530000, avgRent: 2700, avgYield: 6.1 },
+      '3bed':  { avgPrice: 660000, avgRent: 3200, avgYield: 5.8 },
+      '4bed':  { avgPrice: 720000, avgRent: 3600, avgYield: 6.0 },
     },
   },
-  // ONS HPI index values (base 100 = Jan 2016) — sampled bi-annually
   hpiHistory: {
     Manchester: [100,109,124,139,156,171,185,198,214,229,243,255,267,278,291,305,316,326,331],
     Birmingham: [100,107,121,135,150,164,177,189,203,215,226,236,244,251,259,267,274,277,281],
@@ -160,7 +156,6 @@ export const MARKET_DATA = {
   yieldLabels: ['2016','2017','2018','2019','2020','2021','2022','2023','2024','2026'],
 }
 
-// SDLT calculator (2026 rates including surcharge)
 export function calcSDLT(price: number, isAdditional = true): number {
   const surcharge = isAdditional ? 0.05 : 0
   const bands = [
@@ -179,7 +174,6 @@ export function calcSDLT(price: number, isAdditional = true): number {
   return Math.round(tax)
 }
 
-// Mortgage payment calculator
 export function calcMortgagePayment(price: number, deposit: number, rate: number, years: number) {
   const loan = price - deposit
   const r = rate / 100 / 12
@@ -194,7 +188,6 @@ export function calcMortgagePayment(price: number, deposit: number, rate: number
   }
 }
 
-// Net yield calculator
 export function calcNetYield(
   price: number,
   monthlyRent: number,
@@ -233,7 +226,6 @@ export function calcNetMonthlyIncome(
   return Math.round(netAnnual / 12)
 }
 
-// 10-year projection
 export function calcProjection(
   price: number,
   monthlyRent: number,
