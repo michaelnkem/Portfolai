@@ -55,8 +55,20 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
   const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
-  const epcRating = String(enriched?.epcRating || p?.current_energy_rating || '?')
-  const epcKnown = epcRating !== '?' && epcRating !== 'Unknown' && epcRating.length === 1
+  // EPC rating — check all sources: enriched → epc object → property record
+  const epcRaw = String(
+    enriched?.epcRating ||
+    enriched?.current_energy_rating ||
+    epc?.current_energy_rating ||
+    epc?.currentEnergyRating ||
+    epc?.rating ||
+    p?.current_energy_rating ||
+    p?.epc_rating ||
+    ''
+  ).trim().toUpperCase()
+  const epcRatingMatch = epcRaw.match(/[A-G]/)
+  const epcRating = epcRatingMatch?.[0] ?? '?'
+  const epcKnown = epcRating !== '?'
   const epcCompliant = epcKnown && epcRating <= 'C'
 
   const tabs: Array<{ id: DetailTab; label: string }> = [
@@ -71,7 +83,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
       <div className="flex-1 bg-bg/80 backdrop-blur-sm" onClick={onClose} />
 
       <div className="w-full max-w-3xl bg-panel border-l border-border overflow-y-auto flex flex-col">
-        {/* Header */}
         <div className="sticky top-0 z-10 bg-panel border-b border-border p-5 flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-mono tracking-wide text-accent mb-2">PROPERTY ANALYSIS</p>
@@ -105,7 +116,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
           </div>
         </div>
 
-        {/* Key metrics strip */}
         <div className="p-5 grid grid-cols-2 sm:grid-cols-5 gap-3 border-b border-border">
           <Stat label="EST. CURRENT VALUE"
             value={estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : 'No record'}
@@ -120,7 +130,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
           <Stat label="TOTAL ROI" value={totalROI ? `${totalROI}%` : '—'} tone="gold" sub="net yield + cap growth" />
         </div>
 
-        {/* Tabs */}
         <div className="px-5 pt-4 flex gap-1 border-b border-border pb-0">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
@@ -134,22 +143,25 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
 
         <div className="p-5 flex-1">
 
-          {/* OVERVIEW */}
           {tab === 'overview' && (
             <div className="space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div className="card p-5">
                   <p className="stat-label mb-4">PROPERTY ATTRIBUTES</p>
                   {(() => {
-                    const floorArea = enriched?.epcFloorArea
-                      || (epc?.total_floor_area ? Number(epc.total_floor_area) : null)
-                      || p?.internal_area_sqm
-                      || p?.epc_floor_area
+                    // Floor area — EPC register is the highest-fidelity source
+                    const floorArea =
+                      (epc?.total_floor_area ? Number(epc.total_floor_area) : null) ||
+                      (epc?.totalFloorArea ? Number(epc.totalFloorArea) : null) ||
+                      (enriched?.epcFloorArea ? Number(enriched.epcFloorArea) : null) ||
+                      (p?.internal_area_sqm ? Number(p.internal_area_sqm) : null) ||
+                      (p?.epc_floor_area ? Number(p.epc_floor_area) : null) ||
+                      null
 
-                    const bedsLabel   = String(enriched?.attrBedroomsLabel  || (p?.bedrooms  != null ? `${p.bedrooms}`  : 'Unknown'))
-                    const bathsLabel  = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : 'Unknown'))
-                    const tenureLabel = String(enriched?.attrTenureLabel    || String(p?.tenure  ?? '') || 'Unknown')
-                    const gardenLabel = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Yes' : p?.has_garden === false ? 'No' : 'Unknown'))
+                    const bedsLabel    = String(enriched?.attrBedroomsLabel  || (p?.bedrooms  != null ? `${p.bedrooms}`  : 'Unknown'))
+                    const bathsLabel   = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : 'Unknown'))
+                    const tenureLabel  = String(enriched?.attrTenureLabel    || String(p?.tenure  ?? '') || 'Unknown')
+                    const gardenLabel  = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Yes' : p?.has_garden === false ? 'No' : 'Unknown'))
 
                     const bedsInferred   = Boolean(enriched?.attrBedroomsInferred)
                     const bathsInferred  = Boolean(enriched?.attrBathroomsInferred)
@@ -158,13 +170,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
 
                     type Row = [string, string, boolean, boolean]
                     const allRows: Row[] = [
-                      ['Bedrooms',   bedsLabel,                                    false, bedsInferred],
-                      ['Bathrooms',  bathsLabel,                                   false, bathsInferred],
-                      ['Floor Area', floorArea ? `${floorArea}m²` : 'Unknown',    false, false],
-                      ['EPC Rating', epcKnown ? epcRating : 'Unknown',            epcKnown, false],
-                      ['Garden',     gardenLabel,                                  false, gardenInferred],
-                      ['Type',       String(p?.property_type ?? '') || 'Unknown',  false, false],
-                      ['Tenure',     tenureLabel,                                  false, tenureInferred],
+                      ['Bedrooms',   bedsLabel,                                                      false, bedsInferred],
+                      ['Bathrooms',  bathsLabel,                                                     false, bathsInferred],
+                      ['Floor Area', floorArea ? `${floorArea}m²` : 'Unknown',                      false, false],
+                      ['EPC Rating', epcKnown ? epcRating : 'Unknown',                              epcKnown, false],
+                      ['Garden',     gardenLabel,                                                    false, gardenInferred],
+                      ['Type',       String(p?.property_type ?? '') || 'Unknown',                   false, false],
+                      ['Tenure',     tenureLabel,                                                    false, tenureInferred],
                     ]
                     const rows = allRows.filter(([, v]) => v !== 'Unknown')
                     const anyInferred = bedsInferred || tenureInferred || gardenInferred || bathsInferred
@@ -208,7 +220,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                       propertyGrossYield={grossYield}
                       propertyNetYield={netYield}
                       propertyRent={effectiveRent}
-                      propertyBeds={enriched?.attrBedrooms != null ? Number(enriched.attrBedrooms) : (Number(p?.bedrooms) > 0 ? Number(p.bedrooms) : 2)}
+                      propertyBeds={
+                        enriched?.attrBedrooms != null ? Number(enriched.attrBedrooms) :
+                        Number(p?.bedrooms) > 0 ? Number(p.bedrooms) :
+                        0
+                      }
                     /></div>
                 )}
               </div>
@@ -222,7 +238,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
             </div>
           )}
 
-          {/* FINANCIALS */}
           {tab === 'financials' && (
             <div className="space-y-5">
               <div className="card p-5 border-accent/30">
@@ -285,13 +300,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                 <div className="card p-4">
                   <p className="stat-label mb-3">ANNUAL P&L</p>
                   {[
-                    { k: 'Gross rent',     v: `+£${(effectiveRent * 12).toLocaleString()}`,                                       green: true,  red: false, bold: false },
-                    { k: `Voids (${voidWks}wk)`, v: `-£${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()}`,            green: false, red: true,  bold: false },
-                    { k: `Mgmt (${mgmtFee}%)`,   v: `-£${Math.round(effectiveRent * 12 * mgmtFee / 100).toLocaleString()}`,        green: false, red: true,  bold: false },
-                    { k: 'Maintenance',    v: `-£${Math.round((price || 0) * maintenance / 100).toLocaleString()}`,                green: false, red: true,  bold: false },
-                    { k: 'Service charge', v: `-£${serviceCharge.toLocaleString()}`,                                               green: false, red: serviceCharge > 0, bold: false },
-                    { k: 'Ground rent',    v: `-£${groundRent.toLocaleString()}`,                                                  green: false, red: groundRent > 0,    bold: false },
-                    { k: 'NET INCOME',     v: `£${(netMonthly * 12).toLocaleString()}`,                                           green: false, red: false, bold: true  },
+                    { k: 'Gross rent', v: `+£${(effectiveRent * 12).toLocaleString()}`, green: true },
+                    { k: `Voids (${voidWks}wk)`, v: `-£${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()}`, red: true },
+                    { k: `Mgmt (${mgmtFee}%)`, v: `-£${Math.round(effectiveRent * 12 * mgmtFee / 100).toLocaleString()}`, red: true },
+                    { k: `Maintenance`, v: `-£${Math.round((price || 0) * maintenance / 100).toLocaleString()}`, red: true },
+                    { k: 'Service charge', v: `-£${serviceCharge.toLocaleString()}`, red: serviceCharge > 0 },
+                    { k: 'Ground rent', v: `-£${groundRent.toLocaleString()}`, red: groundRent > 0 },
+                    { k: 'NET INCOME', v: `£${(netMonthly * 12).toLocaleString()}`, bold: true },
                   ].map(row => (
                     <div key={row.k} className={`flex justify-between py-2 border-b border-border text-sm ${row.bold ? 'font-bold' : ''}`}>
                       <span className="text-mid">{row.k}</span>
@@ -327,12 +342,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                         tone={cashflow >= 0 ? 'green' : 'red'}
                         sub={cashflow >= 0 ? 'Positive ✓' : 'Negative ⚠'} />
                 </div>
-                {price && <p className="text-xs text-mid mt-3">SDLT (additional property): <strong className="text-white">£{sdlt.toLocaleString()}</strong> · Total acquisition cost: <strong className="text-white">£{(price + sdlt).toLocaleString()}</strong></p>}
+                {price && <p className="text-xs text-mid mt-3">SDLT (additional property): <strong className="text-white">£{sdlt.toLocaleString()}</strong> · Total acquisition cost: <strong className="text-white">£{(price + sdlt + (deposit ? 0 : 0)).toLocaleString()}</strong></p>}
               </div>
             </div>
           )}
 
-          {/* HISTORY */}
           {tab === 'history' && (
             <div className="space-y-5">
               {transactions && transactions.length > 0 ? (
@@ -379,7 +393,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
             </div>
           )}
 
-          {/* RISKS */}
           {tab === 'risks' && (
             <div className="space-y-4">
               <div className={`card p-5 ${epcKnown && !epcCompliant ? 'border-danger/30' : epcKnown ? 'border-accent/30' : 'border-border'}`}>
@@ -427,11 +440,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
               <div className="card p-5">
                 <p className="stat-label mb-3">INVESTMENT RISK FACTORS</p>
                 {[
-                  { risk: 'Rental void risk',    note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
+                  { risk: 'Rental void risk', note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
                   { risk: 'Capital growth risk', note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
-                  { risk: 'EPC compliance',      note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
-                  { risk: 'Leasehold risk',      note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
-                  { risk: 'Interest rate risk',  note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
+                  { risk: 'EPC compliance', note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
+                  { risk: 'Leasehold risk', note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
+                  { risk: 'Interest rate risk', note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
                 ].map(r => (
                   <div key={r.risk} className="flex gap-3 p-3 rounded-lg mb-2" style={{
                     background: r.severity === 'high' ? 'rgba(255,77,109,0.06)' : r.severity === 'med' ? 'rgba(240,192,64,0.06)' : 'rgba(0,212,170,0.06)',
@@ -454,7 +467,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   )
 }
 
-// ── City Market Panel ─────────────────────────────────────────────────────────
 function CityMarketPanel({
   cityName, cityData, propertyPrice, estimatedCurrentValue, propertyGrossYield, propertyNetYield, propertyRent, propertyBeds
 }: {
@@ -545,12 +557,40 @@ function CityMarketPanel({
         </div>
 
         {[
-          { label: 'Est. value',    sublabel: estimatedCurrentValue ? '(est.)' : '(last sold)', prop: fmt(displayPrice),         city: fmt(compAvgPrice),  propRaw: 0,                  cityRaw: 0,           higherIsBetter: false, isPct: false },
-          { label: 'Gross yield',   sublabel: undefined,                                        prop: pct(propertyGrossYield),   city: pct(compAvgYield),  propRaw: propertyGrossYield, cityRaw: compAvgYield, higherIsBetter: true,  isPct: true  },
-          { label: 'Net yield',     sublabel: undefined,                                        prop: pct(propertyNetYield),     city: '—',                propRaw: 0,                  cityRaw: 0,           higherIsBetter: true,  isPct: false },
-          { label: 'Monthly rent',  sublabel: undefined,                                        prop: propertyRent ? `£${propertyRent.toLocaleString()}` : 'Set rent', city: fmt(compAvgRent), propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false },
-          { label: '1yr growth',    sublabel: undefined,                                        prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false },
-          { label: '5yr growth',    sublabel: undefined,                                        prop: `+${cityAvg.capitalGrowth5yr}%`, city: `+${cityAvg.capitalGrowth5yr}%`, propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false },
+          {
+            label: 'Est. value', sublabel: estimatedCurrentValue ? '(est.)' : '(last sold)',
+            prop: fmt(displayPrice), city: fmt(compAvgPrice),
+            propRaw: 0, cityRaw: 0, higherIsBetter: false, isPct: false,
+          },
+          {
+            label: 'Gross yield', sublabel: undefined,
+            prop: pct(propertyGrossYield), city: pct(compAvgYield),
+            propRaw: propertyGrossYield, cityRaw: compAvgYield,
+            higherIsBetter: true, isPct: true,
+          },
+          {
+            label: 'Net yield', sublabel: undefined,
+            prop: pct(propertyNetYield), city: '—',
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
+          },
+          {
+            label: 'Monthly rent', sublabel: undefined,
+            prop: propertyRent ? `£${propertyRent.toLocaleString()}` : 'Set rent',
+            city: fmt(compAvgRent),
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
+          },
+          {
+            label: '1yr growth', sublabel: undefined,
+            prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`,
+            city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`,
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
+          },
+          {
+            label: '5yr growth', sublabel: undefined,
+            prop: `+${cityAvg.capitalGrowth5yr}%`,
+            city: `+${cityAvg.capitalGrowth5yr}%`,
+            propRaw: 0, cityRaw: 0, higherIsBetter: true, isPct: false,
+          },
         ].map((row, i) => (
           <div key={row.label}
             className={`grid grid-cols-3 px-3 py-2.5 border-b border-border last:border-0 ${i % 2 === 0 ? '' : 'bg-white/[0.02]'}`}>
@@ -560,7 +600,8 @@ function CityMarketPanel({
             </div>
             <span className="text-accent font-semibold text-center text-xs">
               {row.prop}
-              {row.isPct && row.propRaw && row.cityRaw ? diff(row.propRaw, row.cityRaw, row.higherIsBetter) : null}
+              {row.isPct && row.propRaw && row.cityRaw
+                ? diff(row.propRaw, row.cityRaw, row.higherIsBetter) : null}
             </span>
             <span className="text-white text-right text-xs">{row.city}</span>
           </div>
