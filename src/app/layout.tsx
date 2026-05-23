@@ -1,11 +1,17 @@
 import type { Metadata } from 'next'
-import { Playfair_Display, IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google'
+import { Playfair_Display, IBM_Plex_Sans, IBM_Plex_Mono, Libre_Baskerville } from 'next/font/google'
 import './globals.css'
 
 const playfair = Playfair_Display({
   subsets: ['latin'],
   weight: ['700', '800'],
   variable: '--font-playfair',
+})
+
+const baskerville = Libre_Baskerville({
+  subsets: ['latin'],
+  weight: ['400', '700'],
+  variable: '--font-baskerville',
 })
 
 const ibm = IBM_Plex_Sans({
@@ -33,7 +39,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${playfair.variable} ${ibm.variable} ${mono.variable}`}>
+    <html lang="en" className={`${playfair.variable} ${ibm.variable} ${mono.variable} ${baskerville.variable}`}>
       <body className="bg-bg text-white font-body antialiased">
         {children}
       </body>
