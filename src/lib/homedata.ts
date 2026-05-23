@@ -111,15 +111,53 @@ export async function getProperty(uprn: string): Promise<PropertyRecord | null> 
   return data
 }
 
-// EPC data by UPRN
+// EPC data by UPRN — tries Homedata first, then free EPC public API
 export async function getEpc(uprn: string): Promise<EpcData | null> {
-  const res = await fetch(
-    `${HOMEDATA_BASE}/api/epc/${uprn}/`,
-    { headers: headers(), cache: 'no-store' },
-  )
-  if (!res.ok) return null
-  const data = await res.json()
-  return data.data || data
+  // Try Homedata first
+  try {
+    const res = await fetch(
+      `${HOMEDATA_BASE}/api/epc/${uprn}/`,
+      { headers: headers(), cache: 'no-store' },
+    )
+    if (res.ok) {
+      const data = await res.json()
+      const epc = data.data || data
+      if (epc?.current_energy_rating || epc?.current_energy_efficiency) return epc
+    }
+  } catch { /* fall through to public API */ }
+
+  // Fallback: EPC open data public API (no auth required)
+  // https://epc.opendatacommunities.org/docs/api
+  try {
+    const res = await fetch(
+      `https://epc.opendatacommunities.org/api/v1/domestic/uprn/${uprn}`,
+      {
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Basic ' + Buffer.from('portfolai@example.com:').toString('base64'),
+        },
+        cache: 'no-store',
+      }
+    )
+    if (res.ok) {
+      const data = await res.json()
+      const row = data?.rows?.[0]
+      if (row) {
+        return {
+          uprn: Number(uprn),
+          current_energy_efficiency: Number(row['current-energy-efficiency'] || 0),
+          potential_energy_efficiency: Number(row['potential-energy-efficiency'] || 0),
+          last_epc_date: String(row['lodgement-date'] || ''),
+          epc_floor_area: Number(row['total-floor-area'] || 0),
+          construction_age_band: String(row['construction-age-band'] || ''),
+          epc_id: String(row['lmk-key'] || ''),
+          current_energy_rating: String(row['current-energy-rating'] || ''),
+        } as EpcData & { current_energy_rating: string }
+      }
+    }
+  } catch { /* both failed */ }
+
+  return null
 }
 
 // Environmental risks
@@ -148,45 +186,11 @@ export async function getTransactions(uprn: string): Promise<SaleRecord[]> {
 export async function getPriceTrends(outcode: string): Promise<PriceTrend[]> {
   const res = await fetch(
     `${HOMEDATA_BASE}/api/price_trends/${outcode}/`,
-    { headers: headers(), cache: 'no-store' },
+    { headers: headers(), next: { revalidate: 3600 } },
   )
-  if (!res.ok) {
-    console.error(`getPriceTrends ${outcode} failed:`, res.status)
-    return []
-  }
+  if (!res.ok) return []
   const data = await res.json()
-
-  // Homedata returns { monthly_average_prices: { "2025-05": 385000, ... } }
-  // Convert the date→price map into PriceTrend[] so the valuation engine can use it
-  if (
-    data.monthly_average_prices &&
-    typeof data.monthly_average_prices === 'object' &&
-    !Array.isArray(data.monthly_average_prices)
-  ) {
-    const map = data.monthly_average_prices as Record<string, number>
-    const items = Object.entries(map).map(([period, price]) => ({
-      outcode,
-      property_type: '',
-      period,
-      median_price: price,
-      mean_price: price,
-      count: 1,
-    }))
-    console.log(`getPriceTrends ${outcode}: monthly_average_prices shape, ${items.length} months`)
-    return items
-  }
-
-  // Fallback: handle array or other known response shapes
-  const items =
-    (Array.isArray(data) ? data : null) ||
-    data.results ||
-    data.data ||
-    data.trends ||
-    data[outcode] ||
-    data[outcode.toLowerCase()] ||
-    []
-  console.log(`getPriceTrends ${outcode}: keys=${Object.keys(data || {}).join(',')}, items=${Array.isArray(items) ? items.length : 'not-array'}`)
-  return Array.isArray(items) ? items : []
+  return data.results || []
 }
 
 // Comparable sales (10 calls — use carefully on free tier)
