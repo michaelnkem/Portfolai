@@ -75,6 +75,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     return () => el.removeEventListener('scroll', handler)
   }, [])
 
+  // ── Data extraction ──────────────────────────────────────────────────────────
   const p        = data.property    as Record<string, unknown>
   const enriched = data.enriched    as Record<string, unknown>
   const epc      = data.epc         as Record<string, unknown> | null
@@ -83,6 +84,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const cityName = data.cityName    as string
   const cityData = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
 
+  // ── Calculations ─────────────────────────────────────────────────────────────
   const effectiveRent = rentSet ? rent : (enriched?.estimatedRent as number || 0)
   const price = Number(p?.last_sold_price ?? 0)
   const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
@@ -91,18 +93,25 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const estimatedCurrentValue = (enriched?.estimatedCurrentValue as number)
     || (price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0)
 
-  const grossYield = price && effectiveRent
-    ? parseFloat(((effectiveRent * 12 / price) * 100).toFixed(2)) : 0
-  const netYield = price && effectiveRent
-    ? parseFloat((calcNetMonthlyIncome(price, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) * 12 / price * 100).toFixed(2)) : 0
-  const netMonthly = price && effectiveRent
-    ? calcNetMonthlyIncome(price, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) : 0
+  // Yield price basis: last sold price first, fall back to estimated current value
+  const _soldP = Number(p?.last_sold_price ?? 0)
+  const yieldPrice = (_soldP > 0) ? _soldP : (estimatedCurrentValue > 0 ? estimatedCurrentValue : 0)
+  const yieldPriceSource: 'last_sold_price' | 'estimated_current_value' | null =
+    _soldP > 0 ? 'last_sold_price' : estimatedCurrentValue > 0 ? 'estimated_current_value' : null
+
+  const grossYield = yieldPrice && effectiveRent
+    ? parseFloat(((effectiveRent * 12 / yieldPrice) * 100).toFixed(2)) : 0
+  const netYield = yieldPrice && effectiveRent
+    ? parseFloat((calcNetMonthlyIncome(yieldPrice, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) * 12 / yieldPrice * 100).toFixed(2)) : 0
+  const netMonthly = yieldPrice && effectiveRent
+    ? calcNetMonthlyIncome(yieldPrice, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) : 0
   const capitalGrowth = cityData?.capitalGrowth1yr || 0
   const totalROI = parseFloat((netYield + capitalGrowth).toFixed(1))
   const sdlt = price ? calcSDLT(price, true) : 0
   const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
   const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
+  // ── EPC resolution ───────────────────────────────────────────────────────────
   const epcRaw = String(
     epc?.current_energy_rating ||
     epc?.currentEnergyRating ||
@@ -118,6 +127,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const epcKnown   = epcRating !== '?'
   const epcCompliant = epcKnown && epcRating <= 'C'
 
+  // ── Attribute resolution ─────────────────────────────────────────────────────
   const floorArea =
     (epc?.total_floor_area  ? Number(epc.total_floor_area)  : null) ||
     (epc?.totalFloorArea    ? Number(epc.totalFloorArea)    : null) ||
@@ -180,7 +190,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   return (
     <div className={inline ? 'flex flex-col flex-1 overflow-hidden bg-[#FAF9F5]' : 'fixed inset-0 z-50 flex bg-[#FAF9F5] overflow-hidden'} style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
 
+      {/* ── Sidebar (modal mode only — inline mode uses the main app sidebar) ── */}
       {!inline && <aside className="hidden lg:flex flex-col w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
+        {/* Logo */}
         <div className="px-6 py-5 border-b border-[#E7E5DD]">
           <button onClick={() => onHome ? onHome() : onClose()}
             className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
@@ -193,6 +205,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           </button>
         </div>
 
+        {/* Nav */}
         <nav className="flex-1 px-4 py-4 space-y-0.5">
           {NAV_ITEMS.map(item => (
             <button key={item.label}
@@ -209,6 +222,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           ))}
         </nav>
 
+        {/* Bottom cards */}
         <div className="px-4 pb-4 space-y-3">
           <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-2xl p-4">
             <p className="text-[11px] font-bold text-[#B7791F] mb-1">⭐ Upgrade to Premium</p>
@@ -225,8 +239,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
         </div>
       </aside>}
 
+      {/* ── Main area ───────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
+        {/* Top header (modal mode only — inline mode uses the main app header) */}
         {!inline && <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E5DD] px-6 lg:px-8 h-[68px] flex items-center justify-between gap-4 z-10">
           <PropertySearchBar
             onSelectProperty={onSearchProperty ?? (() => {})}
@@ -249,6 +265,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           </div>
         </header>}
 
+        {/* ── Sticky scroll summary ──────────────────────────────────────────── */}
         <div className={`shrink-0 overflow-hidden transition-all duration-300 ${scrolled ? 'max-h-[56px] border-b border-[#E7E5DD]' : 'max-h-0'}`}>
           <div className="bg-white/95 backdrop-blur-sm px-6 lg:px-8 h-14 flex items-center justify-between gap-6">
             <p className="text-sm font-semibold text-[#111827] truncate" style={{ fontFamily: SERIF }}>{address.split(',')[0]}</p>
@@ -279,9 +296,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           </div>
         </div>
 
+        {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto" ref={scrollRef}>
           <div className="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
+            {/* ── Property header ────────────────────────────────────────────── */}
             <div className="mb-6">
               <button onClick={onClose}
                 className="flex items-center gap-1.5 text-sm text-[#6B7280] hover:text-[#047857] transition-colors mb-4 group">
@@ -332,12 +351,14 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </div>
             </div>
 
+            {/* ── KPI strip ──────────────────────────────────────────────────── */}
             {isLoading ? (
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
                 {[...Array(5)].map((_, i) => <SkeletonCard key={i} className={i === 0 ? 'col-span-2 lg:col-span-1' : ''} />)}
               </div>
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-4 mb-6">
+                  {/* Est. Current Value */}
                   <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Estimated Current Value</p>
                     <p className="font-bold text-[38px] leading-none text-[#047857] mb-2"
@@ -356,6 +377,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     </div>
                   </div>
 
+                  {/* Last Sold */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Last Sold Price</p>
                     <p className="font-bold text-[28px] leading-none text-[#111827] mb-2"
@@ -367,6 +389,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     )}
                   </div>
 
+                  {/* Gross Yield */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Gross Yield</p>
                     <p className={`font-bold text-[28px] leading-none mb-2 ${grossYield > 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
@@ -374,8 +397,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                       {grossYield ? `${grossYield}%` : '—'}
                     </p>
                     {cityData && <p className="text-xs text-[#6B7280]">Area avg {cityData.avgYield}%</p>}
+                    {yieldPriceSource === 'estimated_current_value' && (
+                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
+                    )}
                   </div>
 
+                  {/* Net Yield */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Net Yield</p>
                     <p className={`font-bold text-[28px] leading-none mb-2 ${netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
@@ -383,8 +410,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                       {netYield ? `${netYield}%` : '—'}
                     </p>
                     <p className="text-xs text-[#6B7280]">After all costs</p>
+                    {yieldPriceSource === 'estimated_current_value' && (
+                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
+                    )}
                   </div>
 
+                  {/* Total ROI */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Total ROI</p>
                     <p className="font-bold text-[28px] leading-none text-[#B7791F] mb-2"
@@ -396,6 +427,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </div>
             )}
 
+            {/* ── Confidence + data quality bar ──────────────────────────────── */}
             <div className="flex items-center justify-between gap-4 mb-5 px-1 flex-wrap">
               <div className="flex items-center gap-3 flex-wrap">
                 {comparablesCount > 0 && (
@@ -415,6 +447,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </p>
             </div>
 
+            {/* ── Tab bar ────────────────────────────────────────────────────── */}
             <div className="flex gap-0 border-b border-[#E7E5DD] mb-6 overflow-x-auto">
               {tabs.map(t => (
                 <button key={t.id} onClick={() => setTab(t.id)}
@@ -428,9 +461,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               ))}
             </div>
 
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* OVERVIEW TAB                                                    */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'overview' && (
               <div className="grid grid-cols-12 gap-5">
 
+                {/* ── Property Details (col 1–4) ──────────────────────────── */}
                 <div className="col-span-12 lg:col-span-4 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Property Details</h3>
                   <div>
@@ -473,6 +510,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 </div>
 
+                {/* ── Investment Signals (col 5–9) ────────────────────────── */}
                 <div className="col-span-12 lg:col-span-5 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Investment Signals</h3>
                   <p className="text-[11px] text-[#9CA3AF] mb-4">Scores are based on 100-point scale. Higher is better.</p>
@@ -525,6 +563,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
+                {/* ── History Preview (col 10–12) ──────────────────────────── */}
                 <div className="col-span-12 lg:col-span-3 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">History Preview</h3>
@@ -567,6 +606,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
+                {/* Data bar */}
                 <div className="col-span-12 bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3 flex gap-6 flex-wrap text-xs text-[#6B7280]">
                   <span>UPRN: <strong className="text-[#374151]">{String(p?.uprn ?? '')}</strong></span>
                   <span>Postcode: <strong className="text-[#374151]">{postcode}</strong></span>
@@ -579,8 +619,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </div>
             )}
 
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* FINANCIALS TAB                                                  */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'financials' && (
               <div className="space-y-5">
+                {/* Rent input */}
                 <div className="bg-white border border-[#A7F3D0] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Monthly Rent (£)</h3>
                   <div className="flex gap-3 items-center">
@@ -603,6 +647,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Cost sliders */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual Costs</h3>
                     <div className="space-y-4">
@@ -626,6 +671,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     </div>
                   </div>
 
+                  {/* P&L */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual P&amp;L</h3>
                     {[
@@ -650,6 +696,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 </div>
 
+                {/* Mortgage modeller */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Mortgage Cashflow Modeller</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-5">
@@ -688,6 +735,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </div>
             )}
 
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* HISTORY TAB                                                     */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'history' && (
               <div className="space-y-5">
                 {transactions && transactions.length > 0 ? (
@@ -741,8 +791,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </div>
             )}
 
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* RISKS TAB                                                       */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'risks' && (
               <div className="space-y-5">
+                {/* EPC card */}
                 <div className={`bg-white rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] border ${
                   epcKnown && !epcCompliant ? 'border-[#FCA5A5]' : epcKnown ? 'border-[#A7F3D0]' : 'border-[#E7E5DD]'
                 }`}>
@@ -769,6 +823,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 </div>
 
+                {/* Environmental risks */}
                 {risks && risks.length > 0 && (
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Environmental Risks — Homedata</h3>
@@ -791,6 +846,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 )}
 
+                {/* Investment risk factors */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Investment Risk Factors</h3>
                   <div className="space-y-3">
@@ -818,6 +874,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </div>
             )}
 
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* MARKET COMPARISON TAB                                           */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'market' && (
               <LightCityMarketPanel
                 cityName={cityName}
@@ -836,6 +895,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
         </div>
       </div>
 
+      {/* Skeleton shimmer styles */}
       <style>{`
         @keyframes shimmer-light {
           0%   { background-position: -200% 0; }
@@ -912,6 +972,7 @@ function LightCityMarketPanel({
         </select>
       </div>
 
+      {/* Local market label */}
       {cityName && (
         <p className="text-[11px] text-[#9CA3AF] mb-4">
           {BEDS.find(b => b.key === selectedBed)?.label} market · {selectedCity}
@@ -919,6 +980,7 @@ function LightCityMarketPanel({
         </p>
       )}
 
+      {/* Bedroom pills */}
       <div className="flex gap-1.5 mb-4 flex-wrap items-center">
         {BEDS.map(b => (
           <button key={b.key} onClick={() => setSelectedBed(b.key)}
@@ -940,6 +1002,7 @@ function LightCityMarketPanel({
         </div>
       )}
 
+      {/* Table */}
       <div className="overflow-hidden rounded-xl border border-[#E7E5DD]">
         <div className="grid grid-cols-3 bg-[#FAF9F5] px-4 py-2.5 border-b border-[#E7E5DD]">
           <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF]">Metric</span>
