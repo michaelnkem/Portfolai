@@ -2,6 +2,22 @@
 
 const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
 
+function formatGBPFull(value: number | string | null | undefined): string {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return '—'
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency', currency: 'GBP', maximumFractionDigits: 0,
+  }).format(n)
+}
+
+function formatPortfolioMoneyCompact(value: number | string | null | undefined): string {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return '—'
+  if (n >= 1_000_000) return `£${(n / 1_000_000).toFixed(1)}m`
+  if (n >= 1_000) return `£${Math.round(n / 1_000)}k`
+  return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 }).format(n)
+}
+
 interface PortfolioProps {
   portfolio: Record<string, unknown>[]
   onRemove: (uprn: string) => void
@@ -66,7 +82,7 @@ export function Portfolio({ portfolio, onRemove, onAI, onSelectProperty }: Portf
       {portfolio.length > 0 && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
-            { label: 'PORTFOLIO VALUE',    value: `£${(totalValue / 1000).toFixed(0)}k`,              color: '#111827', sub: undefined },
+            { label: 'PORTFOLIO VALUE',    value: formatPortfolioMoneyCompact(totalValue), color: '#111827', sub: undefined },
             { label: 'NET MONTHLY INCOME', value: `£${totalNetMonthly.toLocaleString()}`,              color: '#047857', sub: `£${(totalNetMonthly * 12).toLocaleString()} annual` },
             { label: 'AVG NET YIELD',      value: `${avgYield.toFixed(1)}%`,                          color: '#047857', sub: undefined },
             { label: 'AVG TOTAL ROI',      value: `${avgROI.toFixed(1)}%`,                            color: '#B7791F', sub: undefined },
@@ -126,7 +142,7 @@ export function Portfolio({ portfolio, onRemove, onAI, onSelectProperty }: Portf
                   <div className="flex gap-5 text-center">
                     <div>
                       <p className="text-[9px] font-semibold uppercase tracking-wide text-[#9CA3AF] mb-1">VALUE</p>
-                      <p className="text-sm font-bold text-[#111827]" style={{ fontFamily: SERIF }}>£{(value / 1000).toFixed(0)}k</p>
+                      <p className="text-sm font-bold text-[#111827]" style={{ fontFamily: SERIF }}>{formatPortfolioMoneyCompact(value)}</p>
                     </div>
                     <div>
                       <p className="text-[9px] font-semibold uppercase tracking-wide text-[#9CA3AF] mb-1">NET YIELD</p>
@@ -176,7 +192,7 @@ export function Portfolio({ portfolio, onRemove, onAI, onSelectProperty }: Portf
           <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-2xl p-4 mt-2">
             <p className="text-xs font-semibold text-[#047857] mb-1">📊 Portfolio Summary</p>
             <p className="text-xs text-[#375A50]">
-              {portfolio.length} {portfolio.length === 1 ? 'property' : 'properties'} · Total value £{(totalValue / 1000).toFixed(0)}k ·
+              {portfolio.length} {portfolio.length === 1 ? 'property' : 'properties'} · Total value {formatPortfolioMoneyCompact(totalValue)} ·
               Annual net income £{(totalNetMonthly * 12).toLocaleString()} ·
               Avg ROI {avgROI.toFixed(1)}% ·
               {nonCompliantCount > 0
