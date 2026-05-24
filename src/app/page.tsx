@@ -8,9 +8,15 @@ import { Portfolio } from '@/components/property/Portfolio'
 import { ROICalculator } from '@/components/property/ROICalculator'
 import { MARKET_DATA } from '@/lib/market-data'
 
-export type Tab = 'search' | 'market' | 'portfolio' | 'calculator' | 'favourites'
+export type Tab = 'search' | 'market' | 'portfolio' | 'calculator' | 'favourites' | 'alerts' | 'deal-finder' | 'property-analysis'
 
 const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
+
+function fmtVal(n: number): string {
+  if (!n || n <= 0) return '—'
+  if (n >= 1_000_000) return `£${n.toLocaleString()}`
+  return `£${Math.round(n / 1000)}k`
+}
 type CityKey = keyof typeof MARKET_DATA.cities
 
 const SPARKLINES = [
@@ -50,6 +56,12 @@ function resolveValue(item: Record<string, unknown>): number {
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>('search')
+  const [marketPropertyContext, setMarketPropertyContext] = useState<Record<string, unknown> | null>(null)
+
+  const handleTabChange = useCallback((newTab: Tab) => {
+    if (newTab !== 'market') setMarketPropertyContext(null)
+    setTab(newTab)
+  }, [])
   const [selectedProperty, setSelectedProperty] = useState<Record<string, unknown> | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
   const [aiProperty, setAiProperty] = useState<Record<string, unknown> | null>(null)
@@ -62,7 +74,13 @@ export default function Home() {
   const [loadingUprn, setLoadingUprn] = useState('')
 
   const searchRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const debounceRef = useRef<NodeJS.Timeout>()
+
+  const handleSelectProperty = useCallback((data: Record<string, unknown>) => {
+    setSelectedProperty(data)
+    handleTabChange('property-analysis')
+  }, [handleTabChange])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -105,13 +123,13 @@ export default function Home() {
       const res = await fetch(`/api/property?uprn=${uprn}`)
       const data = await res.json()
       if (data.property) {
-        setSelectedProperty({ ...data, suggestion })
+        handleSelectProperty({ ...data, suggestion })
         setSearchQuery('')
         setSearchSuggestions([])
       }
     } catch {}
     setLoadingUprn('')
-  }, [])
+  }, [handleSelectProperty])
 
   const openAI = useCallback((property: Record<string, unknown> | null = null) => {
     setAiProperty(property)
@@ -163,60 +181,67 @@ export default function Home() {
     favourites.has(String((item.property as Record<string, unknown>)?.uprn ?? ''))
   )
 
-  const NAV_ITEMS: Array<{ icon: string; label: string; id: Tab }> = [
-    { icon: '⊞', label: 'Discover',     id: 'search'     },
-    { icon: '📈', label: 'Market Intel', id: 'market'     },
-    { icon: '📂', label: 'Portfolio',    id: 'portfolio'  },
-    { icon: '★',  label: 'Favourites',  id: 'favourites' },
-    { icon: '🧮', label: 'Calculator',  id: 'calculator' },
+  const NAV_ITEMS: Array<{ icon: string; label: string; id: Tab; action?: () => void }> = [
+    { icon: '⊞', label: 'Discover',          id: 'search'            },
+    { icon: '📈', label: 'Market Intel',      id: 'market'            },
+    { icon: '🔍', label: 'Property Analysis', id: 'property-analysis' },
+    { icon: '📂', label: 'Portfolio',         id: 'portfolio'         },
+    { icon: '★',  label: 'Favourites',        id: 'favourites'        },
+    { icon: '🧮', label: 'Calculator',        id: 'calculator'        },
+    { icon: '🤖', label: 'AI Analysis',       id: 'search',           action: () => openAI(null) },
+    { icon: '💼', label: 'Deal Finder',       id: 'deal-finder'       },
+    { icon: '🔔', label: 'Alerts',            id: 'alerts'            },
   ]
 
   return (
     <div className="flex h-screen bg-[#FAF9F5] overflow-hidden" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
 
       {/* ── Sidebar ─────────────────────────────────────────────────────── */}
-      <aside className="hidden lg:flex flex-col w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
-        <div className="px-6 py-5 border-b border-[#E7E5DD]">
-          <div className="flex items-center gap-2.5">
+      <aside className="flex flex-col w-14 lg:w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
+        <div className="px-3 lg:px-6 py-5 border-b border-[#E7E5DD]">
+          <button onClick={() => handleTabChange('search')} className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
             <div className="w-8 h-8 bg-[#047857] rounded-lg flex items-center justify-center shrink-0">
               <svg width="15" height="14" viewBox="0 0 15 14" fill="none">
                 <path d="M1.5 13V6.2L7.5 2l6 4.2V13H10V9H5v4H1.5z" fill="white" />
               </svg>
             </div>
-            <span className="font-bold text-[19px] tracking-tight text-[#111827]" style={{ fontFamily: SERIF }}>Portfolai</span>
-          </div>
+            <span className="hidden lg:block font-bold text-[19px] tracking-tight text-[#111827]" style={{ fontFamily: SERIF }}>Portfolai</span>
+          </button>
         </div>
 
-        <nav className="flex-1 px-4 py-4 space-y-0.5">
-          {NAV_ITEMS.map(item => (
-            <button key={item.label} onClick={() => setTab(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors text-left ${
-                tab === item.id ? 'bg-[#ECFDF5] text-[#047857]' : 'text-[#374151] hover:bg-[#F6F3EC]'
-              }`}>
-              <span className="text-sm w-5 text-center">{item.icon}</span>
-              <span className="text-sm font-medium">{item.label}</span>
-              {item.id === 'portfolio' && portfolio.length > 0 && (
-                <span className="ml-auto text-[10px] font-bold bg-[#047857] text-white w-5 h-5 rounded-full flex items-center justify-center">
-                  {portfolio.length}
-                </span>
-              )}
-              {item.id === 'favourites' && favourites.size > 0 && (
-                <span className="ml-auto text-[10px] font-bold bg-[#B7791F] text-white w-5 h-5 rounded-full flex items-center justify-center">
-                  {favourites.size}
-                </span>
-              )}
-            </button>
-          ))}
+        <nav className="flex-1 px-2 lg:px-4 py-4 space-y-0.5">
+          {NAV_ITEMS.map(item => {
+            const isActive = item.action ? (item.label === 'AI Analysis' && aiOpen) : tab === item.id
+            return (
+              <button key={item.label} onClick={() => item.action ? item.action() : handleTabChange(item.id)} title={item.label}
+                className={`w-full flex items-center justify-center lg:justify-start gap-3 px-2 lg:px-3 py-2.5 rounded-xl transition-colors text-left ${
+                  isActive ? 'bg-[#ECFDF5] text-[#047857]' : 'text-[#374151] hover:bg-[#F6F3EC]'
+                }`}>
+                <span className="text-sm w-5 text-center shrink-0">{item.icon}</span>
+                <span className="hidden lg:block text-sm font-medium">{item.label}</span>
+                {item.id === 'portfolio' && !item.action && portfolio.length > 0 && (
+                  <span className="hidden lg:flex ml-auto text-[10px] font-bold bg-[#047857] text-white w-5 h-5 rounded-full items-center justify-center">
+                    {portfolio.length}
+                  </span>
+                )}
+                {item.id === 'favourites' && !item.action && favourites.size > 0 && (
+                  <span className="hidden lg:flex ml-auto text-[10px] font-bold bg-[#B7791F] text-white w-5 h-5 rounded-full items-center justify-center">
+                    {favourites.size}
+                  </span>
+                )}
+              </button>
+            )
+          })}
           <div className="border-t border-[#E7E5DD] my-2" />
           {[{ icon: '⚙', label: 'Settings' }, { icon: '?', label: 'Help' }].map(item => (
-            <div key={item.label} className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer text-[#374151] hover:bg-[#F6F3EC] transition-colors">
-              <span className="text-sm w-5 text-center">{item.icon}</span>
-              <span className="text-sm font-medium">{item.label}</span>
+            <div key={item.label} title={item.label} className="flex items-center justify-center lg:justify-start gap-3 px-2 lg:px-3 py-2.5 rounded-xl cursor-pointer text-[#374151] hover:bg-[#F6F3EC] transition-colors">
+              <span className="text-sm w-5 text-center shrink-0">{item.icon}</span>
+              <span className="hidden lg:block text-sm font-medium">{item.label}</span>
             </div>
           ))}
         </nav>
 
-        <div className="px-4 pb-4 space-y-3">
+        <div className="hidden lg:block px-4 pb-4 space-y-3">
           <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-2xl p-4">
             <p className="text-[11px] font-bold text-[#B7791F] mb-1">⭐ Upgrade to Premium</p>
             <p className="text-[11px] text-[#6B7280] mb-3 leading-relaxed">Unlock advanced analytics, off-market deals and priority support.</p>
@@ -244,6 +269,7 @@ export default function Home() {
                 <path d="M11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
               <input
+                ref={searchInputRef}
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 onFocus={() => searchSuggestions.length > 0 && setShowSearchDropdown(true)}
@@ -291,37 +317,15 @@ export default function Home() {
               className="hidden sm:flex items-center gap-1.5 bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857] text-xs font-semibold px-3 py-2 rounded-xl hover:bg-[#D1FAE5] transition-colors">
               🤖 AI Analysis
             </button>
-            <button className="relative w-9 h-9 flex items-center justify-center rounded-xl border border-[#E7E5DD] bg-white text-[#6B7280] hover:bg-[#F6F3EC] transition-colors text-base">
+            <button onClick={() => handleTabChange('alerts')}
+              className="w-9 h-9 flex items-center justify-center rounded-xl border border-[#E7E5DD] bg-white text-[#6B7280] hover:bg-[#F6F3EC] transition-colors text-base">
               🔔
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-[#047857] text-white text-[8px] font-bold rounded-full flex items-center justify-center">3</span>
             </button>
             <div className="w-9 h-9 bg-[#047857] rounded-full flex items-center justify-center text-white text-sm font-bold cursor-pointer shrink-0">
               M
             </div>
           </div>
         </header>
-
-        {/* Tab navigation row */}
-        <div className="shrink-0 bg-white border-b border-[#E7E5DD] px-6 lg:px-8 flex items-center overflow-x-auto">
-          {([
-            { id: 'search',     label: 'Discover' },
-            { id: 'market',     label: 'Market Intel' },
-            { id: 'portfolio',  label: portfolio.length > 0 ? `Portfolio (${portfolio.length})` : 'Portfolio' },
-            { id: 'calculator', label: 'Calculator' },
-            { id: 'ai',         label: 'AI Analysis', action: () => openAI(null) },
-            { id: 'favourites', label: 'Favourites' },
-          ] as Array<{ id: string; label: string; action?: () => void }>).map(t => (
-            <button key={t.id}
-              onClick={t.action ?? (() => setTab(t.id as Tab))}
-              className={`shrink-0 px-4 py-3.5 text-sm font-medium transition-all border-b-2 -mb-px ${
-                tab === t.id && !t.action
-                  ? 'border-[#047857] text-[#047857]'
-                  : 'border-transparent text-[#6B7280] hover:text-[#374151]'
-              }`}>
-              {t.label}
-            </button>
-          ))}
-        </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
@@ -420,7 +424,7 @@ export default function Home() {
 
                               return (
                                 <tr key={i} className="border-b border-[#F3F4F6] last:border-0 hover:bg-[#FAF9F5] transition-colors cursor-pointer group"
-                                  onClick={() => setSelectedProperty(item)}>
+                                  onClick={() => handleSelectProperty(item)}>
                                   <td className="px-4 py-3">
                                     <div className="flex items-center gap-3">
                                       <div className="w-10 h-10 bg-[#F6F3EC] rounded-lg flex items-center justify-center shrink-0 text-sm">🏠</div>
@@ -462,7 +466,7 @@ export default function Home() {
                                     </button>
                                   </td>
                                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                                    <button onClick={() => setSelectedProperty(item)}
+                                    <button onClick={() => handleSelectProperty(item)}
                                       className="flex items-center gap-1 text-xs font-semibold text-[#047857] border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1.5 rounded-lg hover:bg-[#D1FAE5] transition-colors whitespace-nowrap">
                                       Open Analysis →
                                     </button>
@@ -514,21 +518,21 @@ export default function Home() {
                           return (
                             <div key={i}
                               className="flex items-center gap-3 bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4 cursor-pointer hover:border-[#A7F3D0] transition-colors group"
-                              onClick={() => setSelectedProperty(item)}>
+                              onClick={() => handleSelectProperty(item)}>
                               <div className="w-14 h-14 bg-[#ECFDF5] rounded-xl flex items-center justify-center text-2xl shrink-0">🏠</div>
                               <div className="min-w-0 flex-1">
                                 <p className="text-sm font-semibold text-[#111827] truncate group-hover:text-[#047857] transition-colors">{addr.split(',')[0]}</p>
                                 <p className="text-xs text-[#9CA3AF] truncate">{String(p?.property_type ?? '')} · {String(item.cityName ?? '')}</p>
                                 <div className="flex items-center gap-3 mt-1.5">
                                   <span className="text-sm font-bold text-[#047857]" style={{ fontFamily: SERIF }}>
-                                    {value ? `£${(value / 1000).toFixed(0)}k` : '—'}
+                                    {fmtVal(value)}
                                   </span>
                                   {grossYield > 0 && <span className="text-xs text-[#B7791F] font-semibold">{grossYield.toFixed(1)}% yield</span>}
                                 </div>
                               </div>
                               <div className="flex flex-col items-end gap-2 shrink-0">
                                 <span className="text-[#B7791F]">★</span>
-                                <button onClick={e => { e.stopPropagation(); setSelectedProperty(item) }}
+                                <button onClick={e => { e.stopPropagation(); handleSelectProperty(item) }}
                                   className="text-xs font-semibold text-[#047857] border border-[#A7F3D0] bg-[#ECFDF5] px-2 py-1 rounded-lg hover:bg-[#D1FAE5] transition-colors whitespace-nowrap">
                                   Open Analysis
                                 </button>
@@ -620,7 +624,7 @@ export default function Home() {
           {/* ── MARKET ──────────────────────────────────────────────────── */}
           {tab === 'market' && (
             <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-              <MarketIntel marketData={MARKET_DATA} onAI={() => openAI(null)} />
+              <MarketIntel marketData={MARKET_DATA} onAI={() => openAI(null)} propertyContext={marketPropertyContext} />
             </div>
           )}
 
@@ -631,7 +635,7 @@ export default function Home() {
                 portfolio={portfolio}
                 onRemove={removeFromPortfolio}
                 onAI={() => openAI(null)}
-                onSelectProperty={setSelectedProperty}
+                onSelectProperty={handleSelectProperty}
               />
             </div>
           )}
@@ -640,6 +644,47 @@ export default function Home() {
           {tab === 'calculator' && (
             <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
               <ROICalculator marketData={MARKET_DATA} onAI={() => openAI(null)} />
+            </div>
+          )}
+
+          {/* ── ALERTS ──────────────────────────────────────────────────── */}
+          {tab === 'alerts' && (
+            <div className="max-w-[800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+              <div className="mb-6">
+                <h2 className="text-2xl font-bold text-[#111827]" style={{ fontFamily: SERIF }}>Alerts</h2>
+                <p className="text-sm text-[#6B7280] mt-1">Updates for your favourited properties</p>
+              </div>
+              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-12 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)] mb-5">
+                <p className="text-4xl mb-3">🔔</p>
+                <p className="font-semibold text-[#374151] mb-2">No new updates</p>
+                <p className="text-sm text-[#6B7280] max-w-[360px] mx-auto">
+                  Favourite properties from your saved list to start receiving alerts about value changes, EPC updates, and more.
+                </p>
+                <button onClick={() => handleTabChange('favourites')}
+                  className="mt-5 bg-[#047857] text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-[#065F46] transition-colors">
+                  View Favourites →
+                </button>
+              </div>
+              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
+                <h3 className="text-sm font-bold text-[#111827] mb-4" style={{ fontFamily: SERIF }}>What we monitor</h3>
+                <div className="space-y-3">
+                  {[
+                    { icon: '📈', label: 'Estimated value changes', sub: 'Based on Land Registry + HPI data' },
+                    { icon: '⚡', label: 'EPC rating updates', sub: 'New certificates filed for your properties' },
+                    { icon: '📋', label: 'New Land Registry sales', sub: 'Comparable transactions in your areas' },
+                    { icon: '💰', label: 'Rental yield shifts', sub: 'Area rental market movements' },
+                    { icon: '⚠', label: 'Environmental risk alerts', sub: 'Flood, subsidence or planning changes' },
+                  ].map(item => (
+                    <div key={item.label} className="flex items-start gap-3 py-2 border-b border-[#F3F4F6] last:border-0">
+                      <span className="text-base mt-0.5">{item.icon}</span>
+                      <div>
+                        <p className="text-sm font-semibold text-[#374151]">{item.label}</p>
+                        <p className="text-xs text-[#9CA3AF]">{item.sub}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
@@ -670,7 +715,7 @@ export default function Home() {
                     return (
                       <div key={i}
                         className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)] cursor-pointer hover:border-[#A7F3D0] transition-all group"
-                        onClick={() => setSelectedProperty(item)}>
+                        onClick={() => handleSelectProperty(item)}>
                         <div className="flex items-start gap-3 mb-4">
                           <div className="w-12 h-12 bg-[#ECFDF5] rounded-xl flex items-center justify-center text-2xl shrink-0">🏠</div>
                           <div className="min-w-0 flex-1">
@@ -684,7 +729,7 @@ export default function Home() {
                         <div className="grid grid-cols-3 gap-3 mb-4">
                           <div>
                             <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] mb-1">Value</p>
-                            <p className="text-sm font-bold text-[#111827]" style={{ fontFamily: SERIF }}>{value ? `£${(value / 1000).toFixed(0)}k` : '—'}</p>
+                            <p className="text-sm font-bold text-[#111827]" style={{ fontFamily: SERIF }}>{fmtVal(value)}</p>
                           </div>
                           <div>
                             <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] mb-1">Yield</p>
@@ -701,7 +746,7 @@ export default function Home() {
                           <span className={`text-sm font-bold ${totalROI >= 8 ? 'text-[#B7791F]' : totalROI > 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`}>
                             {totalROI ? `${totalROI > 0 ? '+' : ''}${totalROI.toFixed(1)}% ROI` : '—'}
                           </span>
-                          <button onClick={e => { e.stopPropagation(); setSelectedProperty(item) }}
+                          <button onClick={e => { e.stopPropagation(); handleSelectProperty(item) }}
                             className="text-xs font-semibold text-[#047857] border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-1.5 rounded-xl hover:bg-[#D1FAE5] transition-colors">
                             Open Analysis →
                           </button>
@@ -713,18 +758,92 @@ export default function Home() {
               )}
             </div>
           )}
+
+          {/* ── PROPERTY ANALYSIS ───────────────────────────────────────── */}
+          {tab === 'property-analysis' && (
+            selectedProperty ? (
+              <PropertyDetail
+                data={selectedProperty}
+                inline
+                onClose={() => setSelectedProperty(null)}
+                onAI={() => openAI(selectedProperty)}
+                onAddPortfolio={() => addToPortfolio(selectedProperty)}
+                onHome={() => handleTabChange('search')}
+                onMarketIntel={(propertyData) => { setMarketPropertyContext(propertyData); handleTabChange('market') }}
+                onSearchProperty={handleSelectProperty}
+                isSaved={portfolio.some(p => (p.property as Record<string, unknown>)?.uprn === (selectedProperty.property as Record<string, unknown>)?.uprn)}
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center flex-1 px-4 py-20">
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-14 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)] max-w-[560px] w-full">
+                  <div className="w-16 h-16 bg-[#ECFDF5] rounded-2xl flex items-center justify-center text-3xl mx-auto mb-6">🔍</div>
+                  <h2 className="text-2xl font-bold text-[#111827] mb-3" style={{ fontFamily: SERIF }}>
+                    Search for a property to begin
+                  </h2>
+                  <p className="text-sm text-[#6B7280] leading-relaxed mb-8 max-w-[380px] mx-auto">
+                    Use the search bar above to analyse a UK property — view investment metrics, valuation, yield, risks, transaction history and local market comparison.
+                  </p>
+                  <button
+                    onClick={() => searchInputRef.current?.focus()}
+                    className="bg-[#047857] text-white text-sm font-semibold px-6 py-3 rounded-xl hover:bg-[#065F46] transition-colors">
+                    Focus search bar →
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-8 max-w-[560px] w-full">
+                  {[
+                    { icon: '📊', title: 'Investment Scorecard', desc: 'AI-generated /10 score with full reasoning.' },
+                    { icon: '💰', title: 'Full Financials', desc: 'Gross vs net yield, cashflow and 10-year projections.' },
+                    { icon: '⚠️', title: 'Risk Assessment', desc: 'EPC compliance, flood risk and environmental data.' },
+                  ].map(f => (
+                    <div key={f.title} className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)] text-left">
+                      <p className="text-xl mb-2">{f.icon}</p>
+                      <p className="text-xs font-bold text-[#111827] mb-1" style={{ fontFamily: SERIF }}>{f.title}</p>
+                      <p className="text-[11px] text-[#6B7280] leading-relaxed">{f.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          )}
+
+          {/* ── DEAL FINDER ─────────────────────────────────────────────── */}
+          {tab === 'deal-finder' && (
+            <div className="max-w-[900px] mx-auto px-4 sm:px-6 lg:px-8 py-10">
+              <div className="mb-8">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#047857] mb-2">DEAL FINDER</p>
+                <h2 className="text-3xl font-bold text-[#111827] mb-2" style={{ fontFamily: SERIF }}>Find your next deal</h2>
+                <p className="text-sm text-[#6B7280]">AI-powered deal sourcing across the UK — below-market properties, high-yield opportunities, and off-market leads.</p>
+              </div>
+              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-14 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)] mb-6">
+                <p className="text-5xl mb-4">💼</p>
+                <p className="text-xl font-bold text-[#111827] mb-2" style={{ fontFamily: SERIF }}>Coming Soon</p>
+                <p className="text-sm text-[#6B7280] max-w-[400px] mx-auto leading-relaxed mb-6">
+                  Deal Finder will surface below-market properties, motivated sellers, and high-yield opportunities matched to your investment criteria.
+                </p>
+                <button onClick={() => openAI(null)}
+                  className="bg-[#047857] text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-[#065F46] transition-colors">
+                  🤖 Ask AI for Deal Ideas →
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {[
+                  { icon: '📉', title: 'Below-Market Alerts', desc: 'Properties listed 10%+ below comparable sold prices in the same postcode.' },
+                  { icon: '🏚️', title: 'Value-Add Opportunities', desc: 'Properties with EPC D/E/F that can be upgraded for immediate yield uplift.' },
+                  { icon: '📬', title: 'Off-Market Leads', desc: 'Motivated sellers sourced directly — no auction, no agent competition.' },
+                ].map(f => (
+                  <div key={f.title} className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)] opacity-60">
+                    <p className="text-2xl mb-3">{f.icon}</p>
+                    <p className="text-sm font-bold text-[#111827] mb-1" style={{ fontFamily: SERIF }}>{f.title}</p>
+                    <p className="text-xs text-[#6B7280] leading-relaxed">{f.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Modals */}
-      {selectedProperty && (
-        <PropertyDetail
-          data={selectedProperty}
-          onClose={() => setSelectedProperty(null)}
-          onAI={() => openAI(selectedProperty)}
-          onAddPortfolio={() => addToPortfolio(selectedProperty)}
-        />
-      )}
+      {/* AI Advisor modal */}
       {aiOpen && <AIAdvisor property={aiProperty} onClose={() => setAiOpen(false)} />}
     </div>
   )
