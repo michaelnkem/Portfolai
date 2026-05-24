@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { LineChart } from '@/components/ui'
+import { PropertySearchBar } from '@/components/property/PropertySearchBar'
 import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, MARKET_DATA } from '@/lib/market-data'
 
 interface PropertyDetailProps {
@@ -9,6 +10,11 @@ interface PropertyDetailProps {
   onClose: () => void
   onAI: () => void
   onAddPortfolio: () => void
+  onHome?: () => void
+  onMarketIntel?: (data: Record<string, unknown>) => void
+  onSearchProperty?: (data: Record<string, unknown>) => void
+  isSaved?: boolean
+  inline?: boolean
 }
 
 type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'market'
@@ -39,7 +45,7 @@ function SkeletonCard({ className = '' }: { className?: string }) {
   )
 }
 
-export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: PropertyDetailProps) {
+export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, onMarketIntel, onSearchProperty, isSaved = false, inline = false }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
   const [rent, setRent] = useState<number>(0)
   const [deposit, setDeposit] = useState(0)
@@ -176,31 +182,37 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
   })()
 
   return (
-    <div className="fixed inset-0 z-50 flex bg-[#FAF9F5] overflow-hidden" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <div className={inline ? 'flex flex-col flex-1 overflow-hidden bg-[#FAF9F5]' : 'fixed inset-0 z-50 flex bg-[#FAF9F5] overflow-hidden'} style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
 
-      {/* ── Sidebar ─────────────────────────────────────────────────────────── */}
-      <aside className="hidden lg:flex flex-col w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
+      {/* ── Sidebar (modal mode only — inline mode uses the main app sidebar) ── */}
+      {!inline && <aside className="hidden lg:flex flex-col w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
         {/* Logo */}
         <div className="px-6 py-5 border-b border-[#E7E5DD]">
-          <div className="flex items-center gap-2.5">
+          <button onClick={() => onHome ? onHome() : onClose()}
+            className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
             <div className="w-8 h-8 bg-[#047857] rounded-lg flex items-center justify-center shrink-0">
               <svg width="15" height="14" viewBox="0 0 15 14" fill="none">
                 <path d="M1.5 13V6.2L7.5 2l6 4.2V13H10V9H5v4H1.5z" fill="white"/>
               </svg>
             </div>
             <span className="text-[#111827] font-bold text-[19px] tracking-tight" style={{ fontFamily: SERIF }}>Portfolai</span>
-          </div>
+          </button>
         </div>
 
         {/* Nav */}
         <nav className="flex-1 px-4 py-4 space-y-0.5">
           {NAV_ITEMS.map(item => (
-            <div key={item.label} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors ${
-              item.active ? 'bg-[#ECFDF5] text-[#047857]' : 'text-[#374151] hover:bg-[#F6F3EC]'
-            }`}>
+            <button key={item.label}
+              onClick={() => {
+                if (item.label === 'Market Insights') onMarketIntel?.(data)
+                else if (item.label === 'Dashboard') onHome ? onHome() : onClose()
+              }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors text-left ${
+                item.active ? 'bg-[#ECFDF5] text-[#047857]' : 'text-[#374151] hover:bg-[#F6F3EC]'
+              }`}>
               <span className="text-sm w-5 text-center">{item.icon}</span>
               <span className="text-sm font-medium">{item.label}</span>
-            </div>
+            </button>
           ))}
         </nav>
 
@@ -219,36 +231,33 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
             <button className="text-xs text-[#047857] font-semibold hover:underline">Book a Call →</button>
           </div>
         </div>
-      </aside>
+      </aside>}
 
       {/* ── Main area ───────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
-        {/* Top header */}
-        <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E5DD] px-6 lg:px-8 h-[68px] flex items-center justify-between gap-4 z-10">
-          <div className="flex items-center gap-3 bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-2.5 flex-1 max-w-[420px]">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0 text-[#9CA3AF]">
-              <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5"/>
-              <path d="M11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
-            <span className="text-[#9CA3AF] text-sm flex-1 min-w-0 truncate">Search properties, areas, or insights…</span>
-            <span className="text-[10px] font-mono text-[#9CA3AF] bg-white border border-[#E7E5DD] px-1.5 py-0.5 rounded shrink-0">⌘K</span>
-          </div>
+        {/* Top header (modal mode only — inline mode uses the main app header) */}
+        {!inline && <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E5DD] px-6 lg:px-8 h-[68px] flex items-center justify-between gap-4 z-10">
+          <PropertySearchBar
+            onSelectProperty={onSearchProperty ?? (() => {})}
+            placeholder="Search properties, areas, or insights…"
+            className="flex-1 max-w-[420px]"
+          />
           <div className="flex items-center gap-2 shrink-0">
             <button onClick={onAI}
               className="hidden sm:flex items-center gap-1.5 bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857] text-xs font-semibold px-3 py-2 rounded-xl hover:bg-[#D1FAE5] transition-colors">
               🤖 AI Analysis
             </button>
-            <button onClick={onAddPortfolio}
-              className="hidden sm:flex items-center gap-1.5 bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] text-xs font-semibold px-3 py-2 rounded-xl hover:bg-[#FEF3C7] transition-colors">
-              ★ Save
+            <button onClick={isSaved ? undefined : onAddPortfolio}
+              className={`hidden sm:flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl transition-colors ${isSaved ? 'bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] cursor-default' : 'bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] hover:bg-[#FEF3C7]'}`}>
+              {isSaved ? '★ Saved' : '★ Save'}
             </button>
             <button onClick={onClose}
               className="w-9 h-9 flex items-center justify-center rounded-xl border border-[#E7E5DD] bg-white text-[#6B7280] hover:bg-[#F6F3EC] transition-colors text-sm font-medium">
               ✕
             </button>
           </div>
-        </header>
+        </header>}
 
         {/* ── Sticky scroll summary ──────────────────────────────────────────── */}
         <div className={`shrink-0 overflow-hidden transition-all duration-300 ${scrolled ? 'max-h-[56px] border-b border-[#E7E5DD]' : 'max-h-0'}`}>
@@ -273,9 +282,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                   <span className="text-sm font-bold text-[#B7791F]" style={{ fontFamily: SERIF }}>{totalROI}%</span>
                 </div>
               )}
-              <button onClick={onAddPortfolio}
-                className="bg-[#047857] text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-[#065F46] transition-colors">
-                + Portfolio
+              <button onClick={isSaved ? undefined : onAddPortfolio}
+                className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${isSaved ? 'bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] cursor-default' : 'bg-[#047857] text-white hover:bg-[#065F46]'}`}>
+                {isSaved ? '★ Saved' : '+ Portfolio'}
               </button>
             </div>
           </div>
@@ -325,9 +334,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                   <button className="border border-[#E7E5DD] bg-white text-[#374151] text-sm font-medium px-4 py-2 rounded-xl hover:bg-[#F6F3EC] transition-colors">
                     ↗ Share
                   </button>
-                  <button onClick={onAddPortfolio}
-                    className="border border-[#E7E5DD] bg-white text-[#374151] text-sm font-medium px-4 py-2 rounded-xl hover:bg-[#F6F3EC] transition-colors">
-                    ☆ Save
+                  <button onClick={isSaved ? undefined : onAddPortfolio}
+                    className={`text-sm font-medium px-4 py-2 rounded-xl transition-colors ${isSaved ? 'bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] cursor-default' : 'border border-[#E7E5DD] bg-white text-[#374151] hover:bg-[#F6F3EC]'}`}>
+                    {isSaved ? '★ Saved' : '☆ Save'}
                   </button>
                   <button className="bg-[#047857] text-white text-sm font-medium px-4 py-2 rounded-xl hover:bg-[#065F46] transition-colors">
                     ↓ Export
@@ -585,72 +594,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                   )}
                 </div>
 
-                {/* ── Market Comparison (col 1–8) ─────────────────────────── */}
-                <div className="col-span-12 lg:col-span-8">
-                  <LightCityMarketPanel
-                    cityName={cityName}
-                    cityData={cityData as Record<string, number>}
-                    propertyPrice={price}
-                    estimatedCurrentValue={estimatedCurrentValue}
-                    propertyGrossYield={grossYield}
-                    propertyNetYield={netYield}
-                    propertyRent={effectiveRent}
-                    propertyBeds={propertyBeds}
-                  />
-                </div>
-
-                {/* ── Risk Preview (col 9–12) ──────────────────────────────── */}
-                <div className="col-span-12 lg:col-span-4 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Risk Preview</h3>
-                    <button onClick={() => setTab('risks')} className="text-xs text-[#047857] font-semibold hover:underline">
-                      View full risks →
-                    </button>
-                  </div>
-                  <div className="space-y-0">
-                    {/* EPC row */}
-                    <div className="py-3 border-b border-[#F3F4F6]">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-2">EPC Compliance</p>
-                      {epcKnown ? (
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`text-sm font-bold px-2 py-0.5 rounded-lg border ${epcBadgeClass}`}>{epcRating}</span>
-                            <span className={`text-sm font-semibold ${epcCompliant ? 'text-[#047857]' : 'text-[#B7791F]'}`}>
-                              {epcCompliant ? 'Compliant' : 'Needs upgrade'}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-[#9CA3AF]">
-                            {epcCompliant ? 'No upgrade required' : 'Works needed before 2028 · Est. £4–12k'}
-                          </p>
-                        </div>
-                      ) : (
-                        <span className="text-sm text-[#9CA3AF]">Not assessed</span>
-                      )}
-                    </div>
-                    {/* Environmental risks */}
-                    {risks && risks.slice(0, 4).map((r, i) => {
-                      const score = Number(r.score ?? 0)
-                      const label = String(r.label ?? '')
-                      const riskType = String(r.risk_type ?? '').replace(/_/g, ' ')
-                      const badgeCls = score <= 1
-                        ? 'bg-[#ECFDF5] text-[#047857]'
-                        : score <= 2
-                        ? 'bg-[#FFF7E6] text-[#B7791F]'
-                        : 'bg-[#FEF2F2] text-[#DC2626]'
-                      return (
-                        <div key={i} className="flex items-center justify-between py-3 border-b border-[#F3F4F6] last:border-0">
-                          <span className="text-sm text-[#475569] capitalize">{riskType}</span>
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${badgeCls}`}>{label}</span>
-                        </div>
-                      )
-                    })}
-                    <button onClick={() => setTab('risks')}
-                      className="w-full mt-4 border border-[#E7E5DD] text-[#374151] text-xs font-medium py-2.5 rounded-xl hover:bg-[#F6F3EC] transition-colors">
-                      View full risk report
-                    </button>
-                  </div>
-                </div>
-
                 {/* Data bar */}
                 <div className="col-span-12 bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3 flex gap-6 flex-wrap text-xs text-[#6B7280]">
                   <span>UPRN: <strong className="text-[#374151]">{String(p?.uprn ?? '')}</strong></span>
@@ -808,283 +751,4 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio }: Property
                             <span className="text-xs text-[#9CA3AF]">{String(t.transaction_type ?? '')}</span>
                             {i < transactions.length - 1 && (
                               <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${
-                                Number(t.price ?? 0) > Number(transactions[i + 1].price ?? 0)
-                                  ? 'bg-[#ECFDF5] text-[#047857]'
-                                  : 'bg-[#FEF2F2] text-[#DC2626]'
-                              }`}>
-                                {Number(t.price ?? 0) > Number(transactions[i + 1].price ?? 0) ? '↑' : '↓'}
-                                {Math.abs(Math.round((Number(t.price ?? 0) / Number(transactions[i + 1].price ?? 1) - 1) * 100))}%
-                              </span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3">
-                      <p className="text-xs text-[#6B7280]">
-                        Transaction data provided by HM Land Registry via Homedata API. Includes all registered sales at market value. Data updated monthly.
-                      </p>
-                    </div>
-                  </>
-                ) : (
-                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
-                    <p className="text-4xl mb-3">📋</p>
-                    <p className="font-semibold text-[#111827] mb-2">No transactions on record yet</p>
-                    <p className="text-sm text-[#6B7280]">This property may be newly built or not yet registered with HM Land Registry.</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* ═══════════════════════════════════════════════════════════════ */}
-            {/* RISKS TAB                                                       */}
-            {/* ═══════════════════════════════════════════════════════════════ */}
-            {tab === 'risks' && (
-              <div className="space-y-5">
-                {/* EPC card */}
-                <div className={`bg-white rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] border ${
-                  epcKnown && !epcCompliant ? 'border-[#FCA5A5]' : epcKnown ? 'border-[#A7F3D0]' : 'border-[#E7E5DD]'
-                }`}>
-                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">EPC Compliance</h3>
-                  <div className="flex items-start gap-5">
-                    <div className={`text-6xl font-bold leading-none ${epcColor}`} style={{ fontFamily: SERIF }}>
-                      {epcKnown ? epcRating : '?'}
-                    </div>
-                    <div>
-                      <p className={`text-base font-semibold mb-1 ${!epcKnown ? 'text-[#9CA3AF]' : epcCompliant ? 'text-[#047857]' : 'text-[#B7791F]'}`}>
-                        {!epcKnown
-                          ? 'EPC not assessed — contact local authority'
-                          : epcCompliant
-                          ? '✓ Compliant with proposed 2028 EPC-C rules'
-                          : '⚠ At risk — upgrade required before 2028'}
-                      </p>
-                      {epcKnown && <p className="text-sm text-[#6B7280]">Score: {String(epc?.current_energy_efficiency ?? '?')}/100 · Potential: {String(epc?.potential_energy_efficiency ?? '?')}/100</p>}
-                      {epcKnown && <p className="text-sm text-[#6B7280]">Cert date: {String(epc?.last_epc_date ?? epc?.inspection_date ?? 'Unknown')}</p>}
-                      {epc?.source === 'epc_open_data' && <p className="text-xs text-[#9CA3AF] mt-0.5">Source: EPC Open Data Register</p>}
-                      {epcKnown && !epcCompliant && (
-                        <p className="text-sm text-[#DC2626] mt-1 font-medium">Estimated upgrade cost: £4,000–£12,000 depending on works needed</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Environmental risks */}
-                {risks && risks.length > 0 && (
-                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
-                    <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Environmental Risks — Homedata</h3>
-                    {risks.map((r, i) => {
-                      const score = Number(r.score ?? 0)
-                      const label = String(r.label ?? '')
-                      const riskType = String(r.risk_type ?? '').replace(/_/g, ' ')
-                      const badgeCls = score <= 1
-                        ? 'bg-[#ECFDF5] text-[#047857]'
-                        : score <= 2
-                        ? 'bg-[#FFF7E6] text-[#B7791F]'
-                        : 'bg-[#FEF2F2] text-[#DC2626]'
-                      return (
-                        <div key={i} className="flex justify-between items-center py-3 border-b border-[#F3F4F6] last:border-0">
-                          <span className="text-sm text-[#475569] capitalize">{riskType}</span>
-                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${badgeCls}`}>{label}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {/* Investment risk factors */}
-                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
-                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Investment Risk Factors</h3>
-                  <div className="space-y-3">
-                    {[
-                      { risk: 'Rental void risk',     note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
-                      { risk: 'Capital growth risk',  note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
-                      { risk: 'EPC compliance',       note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
-                      { risk: 'Leasehold risk',       note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
-                      { risk: 'Interest rate risk',   note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
-                    ].map(r => (
-                      <div key={r.risk} className={`flex gap-4 p-4 rounded-xl border ${
-                        r.severity === 'high' ? 'bg-[#FEF2F2] border-[#FCA5A5]' :
-                        r.severity === 'med'  ? 'bg-[#FFF7E6] border-[#F5D48A]' :
-                                                'bg-[#ECFDF5] border-[#A7F3D0]'
-                      }`}>
-                        <span className="text-lg shrink-0">{r.severity === 'high' ? '🔴' : r.severity === 'med' ? '🟡' : '🟢'}</span>
-                        <div>
-                          <p className="text-sm font-semibold text-[#111827]">{r.risk}</p>
-                          <p className="text-xs text-[#475569] mt-0.5">{r.note}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ═══════════════════════════════════════════════════════════════ */}
-            {/* MARKET COMPARISON TAB                                           */}
-            {/* ═══════════════════════════════════════════════════════════════ */}
-            {tab === 'market' && (
-              <LightCityMarketPanel
-                cityName={cityName}
-                cityData={cityData as Record<string, number>}
-                propertyPrice={price}
-                estimatedCurrentValue={estimatedCurrentValue}
-                propertyGrossYield={grossYield}
-                propertyNetYield={netYield}
-                propertyRent={effectiveRent}
-                propertyBeds={propertyBeds}
-                fullWidth
-              />
-            )}
-
-          </div>
-        </div>
-      </div>
-
-      {/* Skeleton shimmer styles */}
-      <style>{`
-        @keyframes shimmer-light {
-          0%   { background-position: -200% 0; }
-          100% { background-position:  200% 0; }
-        }
-        .skeleton-light {
-          background: linear-gradient(90deg, #F3F4F6 25%, #E9EAEC 50%, #F3F4F6 75%);
-          background-size: 200% 100%;
-          animation: shimmer-light 1.4s ease-in-out infinite;
-        }
-      `}</style>
-    </div>
-  )
-}
-
-// ── Light-themed Market Comparison Panel ─────────────────────────────────────
-function LightCityMarketPanel({
-  cityName, cityData, propertyPrice, estimatedCurrentValue,
-  propertyGrossYield, propertyNetYield, propertyRent, propertyBeds, fullWidth
-}: {
-  cityName: string
-  cityData: Record<string, number>
-  propertyPrice: number
-  estimatedCurrentValue: number
-  propertyGrossYield: number
-  propertyNetYield: number
-  propertyRent: number
-  propertyBeds: number
-  fullWidth?: boolean
-}) {
-  const [selectedCity, setSelectedCity] = useState(cityName)
-  const bedKey = (n: number) => n === 0 ? 'studio' : `${n}bed`
-  const defaultBedKey = bedKey(propertyBeds)
-  const [selectedBed, setSelectedBed] = useState(defaultBedKey)
-
-  const cities     = Object.keys(MARKET_DATA.cities)
-  const cityAvg    = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
-  const bedroomData = (MARKET_DATA.cityByBedroom as Record<string, Record<string, { avgPrice: number; avgRent: number; avgYield: number }>>)[selectedCity]?.[selectedBed]
-
-  const compAvgPrice = bedroomData?.avgPrice ?? cityAvg.avgPrice
-  const compAvgRent  = bedroomData?.avgRent  ?? cityAvg.avgRent
-  const compAvgYield = bedroomData?.avgYield ?? cityAvg.avgYield
-  const displayPrice = estimatedCurrentValue || propertyPrice
-
-  const BEDS = [
-    { key: 'studio', label: 'Studio' },
-    { key: '1bed',   label: '1 Bed'  },
-    { key: '2bed',   label: '2 Bed'  },
-    { key: '3bed',   label: '3 Bed'  },
-    { key: '4bed',   label: '4 Bed'  },
-  ]
-
-  const fmt = (v: number) => v ? `£${v.toLocaleString()}` : '—'
-  const pct = (v: number) => v ? `${v.toFixed(1)}%` : '—'
-
-  const rows = [
-    { label: 'Estimated Value',  sub: estimatedCurrentValue ? '(est.)' : '(last sold)', prop: fmt(displayPrice),          city: fmt(compAvgPrice),  propRaw: 0,                  cityRaw: 0 },
-    { label: 'Gross Yield',      sub: undefined,                                          prop: pct(propertyGrossYield),    city: pct(compAvgYield),  propRaw: propertyGrossYield, cityRaw: compAvgYield },
-    { label: 'Net Yield',        sub: undefined,                                          prop: pct(propertyNetYield),      city: '—',                propRaw: 0,                  cityRaw: 0 },
-    { label: 'Monthly Rent',     sub: undefined,                                          prop: propertyRent ? fmt(propertyRent) : 'Set rent', city: fmt(compAvgRent), propRaw: 0, cityRaw: 0 },
-    { label: '1yr Growth',       sub: undefined,                                          prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, propRaw: 0, cityRaw: 0 },
-    { label: '5yr Growth',       sub: undefined,                                          prop: `+${cityAvg.capitalGrowth5yr}%`, city: `+${cityAvg.capitalGrowth5yr}%`, propRaw: 0, cityRaw: 0 },
-  ]
-
-  return (
-    <div className={`bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] h-full ${fullWidth ? '' : ''}`}>
-      <div className="flex items-center justify-between mb-1 flex-wrap gap-3">
-        <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Market Comparison</h3>
-        <select value={selectedCity} onChange={e => setSelectedCity(e.target.value)}
-          className="bg-[#FAF9F5] border border-[#E7E5DD] text-[#374151] text-xs font-medium rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
-          {cities.map(c => (
-            <option key={c} value={c}>{c}{c === cityName ? ' ★' : ''}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Local market label */}
-      {cityName && (
-        <p className="text-[11px] text-[#9CA3AF] mb-4">
-          {BEDS.find(b => b.key === selectedBed)?.label} market · {selectedCity}
-          {selectedCity !== cityName && ` (your property is in ${cityName})`}
-        </p>
-      )}
-
-      {/* Bedroom pills */}
-      <div className="flex gap-1.5 mb-4 flex-wrap items-center">
-        {BEDS.map(b => (
-          <button key={b.key} onClick={() => setSelectedBed(b.key)}
-            className={`px-3 py-1.5 rounded-full text-[12px] font-medium transition-all border ${
-              selectedBed === b.key
-                ? 'bg-[#047857] border-[#047857] text-white'
-                : 'bg-white border-[#E7E5DD] text-[#6B7280] hover:border-[#047857] hover:text-[#047857]'
-            }`}>
-            {b.label}
-            {b.key === defaultBedKey && <span className="ml-1 text-[9px] opacity-60">★</span>}
-          </button>
-        ))}
-        <span className="ml-auto text-[10px] text-[#9CA3AF]">★ matches property</span>
-      </div>
-
-      {selectedCity !== cityName && (
-        <div className="mb-4 px-3 py-2 bg-[#FFF7E6] border border-[#F5D48A] rounded-xl">
-          <p className="text-[11px] text-[#B7791F] font-medium">Comparing {cityName} property vs {selectedCity} market</p>
-        </div>
-      )}
-
-      {/* Table */}
-      <div className="overflow-hidden rounded-xl border border-[#E7E5DD]">
-        <div className="grid grid-cols-3 bg-[#FAF9F5] px-4 py-2.5 border-b border-[#E7E5DD]">
-          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF]">Metric</span>
-          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#047857] text-center">This Property</span>
-          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF] text-right">
-            {BEDS.find(b => b.key === selectedBed)?.label} · {selectedCity}
-          </span>
-        </div>
-        {rows.map((row, i) => (
-          <div key={row.label} className={`grid grid-cols-3 px-4 py-3.5 border-b border-[#F3F4F6] last:border-0 ${i % 2 !== 0 ? 'bg-[#FAFAF8]' : ''}`}>
-            <div>
-              <span className="text-sm text-[#475569]">{row.label}</span>
-              {row.sub && <span className="text-[10px] text-[#9CA3AF] ml-1">{row.sub}</span>}
-            </div>
-            <div className="text-center">
-              <span className="text-sm font-semibold text-[#047857]">{row.prop}</span>
-              {row.propRaw > 0 && row.cityRaw > 0 && (
-                <span className={`text-[10px] ml-1.5 font-mono ${row.propRaw > row.cityRaw ? 'text-[#047857]' : 'text-[#DC2626]'}`}>
-                  {row.propRaw > row.cityRaw ? '+' : ''}{(row.propRaw - row.cityRaw).toFixed(1)}
-                </span>
-              )}
-            </div>
-            <span className="text-sm text-[#374151] text-right">{row.city}</span>
-          </div>
-        ))}
-      </div>
-
-      <p className="text-[10px] text-[#9CA3AF] mt-3">
-        {bedroomData
-          ? `${BEDS.find(b => b.key === selectedBed)?.label} avg for ${selectedCity} · Zoopla 2026 · REalyse`
-          : `City-wide avg for ${selectedCity} · ONS HPI · Zoopla April 2026`}
-      </p>
-    </div>
-  )
-}
-
-function defaultServiceCharge(p: Record<string, unknown>): number {
-  const type = String(p?.property_type ?? '').toLowerCase()
-  return type.includes('flat') || type.includes('apartment') ? 2000 : 0
-}
+                                Number
