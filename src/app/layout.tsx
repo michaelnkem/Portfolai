@@ -40,7 +40,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${playfair.variable} ${ibm.variable} ${mono.variable} ${baskerville.variable}`}>
-      <body className="bg-bg text-white font-body antialiased">
+      <body className="bg-[#FAF9F5] text-[#111827] font-body antialiased">
         {children}
       </body>
     </html>
