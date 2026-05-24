@@ -89,9 +89,21 @@ export function Sparkline({ data, color = '#00d4aa', width = 80, height = 28 }: 
 
 // ── Line chart ─────────────────────────────────────────────────────────────
 interface LineSeries { name: string; data: number[]; color: string }
-interface LineChartProps { series: LineSeries[]; labels: string[]; height?: number }
+interface LineChartProps {
+  series: LineSeries[]
+  labels: string[]
+  height?: number
+  gridColor?: string
+  labelColor?: string
+}
 
-export function LineChart({ series, labels, height = 120 }: LineChartProps) {
+export function LineChart({
+  series,
+  labels,
+  height = 120,
+  gridColor = '#E7E5DD',
+  labelColor = '#9CA3AF',
+}: LineChartProps) {
   const allVals = series.flatMap(s => s.data)
   const min = Math.min(...allVals), max = Math.max(...allVals)
   const range = max - min || 1
@@ -105,7 +117,7 @@ export function LineChart({ series, labels, height = 120 }: LineChartProps) {
     <svg viewBox={`0 0 ${W} ${H + 16}`} style={{ width: '100%', height: H + 20 }}>
       {[0, 0.25, 0.5, 0.75, 1].map(t => (
         <line key={t} x1={0} y1={H - t * (H - 8) - 4} x2={W} y2={H - t * (H - 8) - 4}
-              stroke="#0f2240" strokeWidth="1" />
+              stroke={gridColor} strokeWidth="1" />
       ))}
       {series.map(s => {
         const pts = s.data.map((v, i) => `${px(i)},${py(v)}`).join(' ')
@@ -119,7 +131,7 @@ export function LineChart({ series, labels, height = 120 }: LineChartProps) {
       })}
       {labels.map((l, i) => {
         if (i % stepLabels !== 0) return null
-        return <text key={l} x={px(i)} y={H + 14} textAnchor="middle" fontSize="8" fill="#3a5570">{l}</text>
+        return <text key={l} x={px(i)} y={H + 14} textAnchor="middle" fontSize="8" fill={labelColor}>{l}</text>
       })}
     </svg>
   )
