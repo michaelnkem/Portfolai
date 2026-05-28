@@ -266,3 +266,96 @@ export function calcProjection(
   }
   return years
 }
+
+// ── Section 24 Tax Calculator ─────────────────────────────────────────────────
+// UK 2026/27 income tax thresholds (England, Wales, Northern Ireland)
+export const PERSONAL_ALLOWANCE = 12570
+export const BASIC_RATE_LIMIT   = 50270
+export const HIGHER_RATE_LIMIT  = 125140
+
+export interface Section24Result {
+  taxableProfit:     number   // annual rental profit before mortgage interest deduction
+  incomeTaxOnRent:   number   // gross income tax attributable to rental profit
+  section24Credit:   number   // 20% basic-rate credit on annual mortgage interest
+  totalTaxPaid:      number   // net tax after Section 24 credit (never below zero)
+  afterTaxMonthly:   number   // actual monthly income after expenses, interest and tax
+  taxBand:           string   // 'Basic (20%)' | 'Higher (40%)' | 'Additional (45%)'
+  effectiveRate:     number   // % of taxable rental profit lost to tax
+  pushesIntoHigher:  boolean  // true when rental income tips investor into 40% band
+}
+
+function _calcIncomeTax(income: number): number {
+  if (income <= PERSONAL_ALLOWANCE) return 0
+  let tax = 0
+  const basicTaxable = Math.min(income, BASIC_RATE_LIMIT) - PERSONAL_ALLOWANCE
+  if (basicTaxable > 0) tax += basicTaxable * 0.20
+  if (income > BASIC_RATE_LIMIT) {
+    tax += (Math.min(income, HIGHER_RATE_LIMIT) - BASIC_RATE_LIMIT) * 0.40
+  }
+  if (income > HIGHER_RATE_LIMIT) {
+    tax += (income - HIGHER_RATE_LIMIT) * 0.45
+  }
+  return tax
+}
+
+export function calcSection24(
+  propertyPrice: number,
+  monthlyRent: number,
+  otherAnnualIncome: number,
+  annualMortgageInterest: number,
+  serviceCharge: number,
+  groundRent: number,
+  managementFee: number,
+  maintenanceAllowance: number,
+  voidWeeks: number,
+): Section24Result {
+  // STEP 1: Effective annual rent after voids
+  const annualRent = monthlyRent * ((52 - voidWeeks) / 52) * 12
+
+  // STEP 2: Allowable expenses (mortgage interest excluded under Section 24)
+  const mgmtCost  = annualRent * (managementFee / 100)
+  const maintCost = propertyPrice * (maintenanceAllowance / 100)
+  const allowable = mgmtCost + maintCost + serviceCharge + groundRent
+
+  // STEP 3: Taxable profit — mortgage interest is NOT deducted
+  const taxableProfit = Math.max(0, annualRent - allowable)
+
+  // STEPS 4 & 5: Marginal tax on rental profit only
+  const totalIncome     = otherAnnualIncome + taxableProfit
+  const incomeTaxOnRent = Math.max(0, _calcIncomeTax(totalIncome) - _calcIncomeTax(otherAnnualIncome))
+
+  // STEP 6: Section 24 credit — 20% of mortgage interest
+  const section24Credit = annualMortgageInterest * 0.20
+
+  // STEP 7: Net tax after credit
+  const totalTaxPaid = Math.max(0, incomeTaxOnRent - section24Credit)
+
+  // STEPS 8 & 9: After-tax monthly income
+  const netAnnual       = annualRent - allowable - annualMortgageInterest - totalTaxPaid
+  const afterTaxMonthly = Math.round(netAnnual / 12)
+
+  const taxBand = totalIncome > HIGHER_RATE_LIMIT
+    ? 'Additional (45%)'
+    : totalIncome > BASIC_RATE_LIMIT
+    ? 'Higher (40%)'
+    : 'Basic (20%)'
+
+  const effectiveRate = taxableProfit > 0
+    ? parseFloat(((totalTaxPaid / taxableProfit) * 100).toFixed(1))
+    : 0
+
+  const pushesIntoHigher =
+    otherAnnualIncome < BASIC_RATE_LIMIT &&
+    totalIncome > BASIC_RATE_LIMIT
+
+  return {
+    taxableProfit:    Math.round(taxableProfit),
+    incomeTaxOnRent:  Math.round(incomeTaxOnRent),
+    section24Credit:  Math.round(section24Credit),
+    totalTaxPaid:     Math.round(totalTaxPaid),
+    afterTaxMonthly,
+    taxBand,
+    effectiveRate,
+    pushesIntoHigher,
+  }
+}
