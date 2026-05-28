@@ -804,29 +804,35 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                       )}
 
                       {/* Three KPI cards */}
-                      <div className="grid grid-cols-3 gap-3 mb-4">
+                      <div className="grid grid-cols-3 gap-3 mb-3">
                         <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-4">
-                          <p className="text-[10px] uppercase tracking-[0.08em] text-[#047857] mb-1.5">Pre-Tax Net Income</p>
+                          <p className="text-[10px] uppercase tracking-[0.08em] text-[#047857] mb-1.5">Taxable Rental Profit</p>
                           <p className="font-bold text-lg text-[#047857]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
-                            £{(netMonthly).toLocaleString()}/mo
+                            £{netMonthly.toLocaleString()}/mo
                           </p>
-                          <p className="text-[10px] text-[#6B7280] mt-1">Before income tax</p>
+                          <p className="text-[10px] text-[#6B7280] mt-1">Before mortgage interest relief</p>
                         </div>
                         <div className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-xl p-4">
-                          <p className="text-[10px] uppercase tracking-[0.08em] text-[#DC2626] mb-1.5">Tax Paid</p>
+                          <p className="text-[10px] uppercase tracking-[0.08em] text-[#DC2626] mb-1.5">Tax Paid on Rent</p>
                           <p className="font-bold text-lg text-[#DC2626]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
                             £{Math.round(section24Result.totalTaxPaid / 12).toLocaleString()}/mo
                           </p>
-                          <p className="text-[10px] text-[#6B7280] mt-1">{section24Result.taxBand} · {section24Result.effectiveRate}% eff.</p>
+                          <p className="text-[10px] text-[#6B7280] mt-1">After Section 24 credit</p>
+                          <p className="text-[10px] text-[#9CA3AF] mt-0.5">{section24Result.taxBand} · {section24Result.effectiveRate}% eff.</p>
                         </div>
                         <div className={`border rounded-xl p-4 ${section24Result.afterTaxMonthly > 0 ? 'bg-[#ECFDF5] border-[#A7F3D0]' : 'bg-[#FEF2F2] border-[#FCA5A5]'}`}>
-                          <p className={`text-[10px] uppercase tracking-[0.08em] mb-1.5 ${section24Result.afterTaxMonthly > 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`}>After-Tax Income</p>
+                          <p className={`text-[10px] uppercase tracking-[0.08em] mb-1.5 ${section24Result.afterTaxMonthly > 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`}>After-Tax Cash Income</p>
                           <p className={`font-bold text-lg ${section24Result.afterTaxMonthly > 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`} style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
                             £{section24Result.afterTaxMonthly.toLocaleString()}/mo
                           </p>
-                          <p className="text-[10px] text-[#6B7280] mt-1">Net of all costs &amp; tax</p>
+                          <p className="text-[10px] text-[#6B7280] mt-1">After costs, interest &amp; tax</p>
                         </div>
                       </div>
+
+                      {/* Helper note */}
+                      <p className="text-[11px] text-[#9CA3AF] leading-relaxed mb-4">
+                        Taxable rental profit excludes mortgage interest under Section 24. Mortgage interest is instead handled through a 20% tax credit and then deducted when calculating after-tax cash income.
+                      </p>
 
                       {/* Detailed breakdown toggle */}
                       <button
