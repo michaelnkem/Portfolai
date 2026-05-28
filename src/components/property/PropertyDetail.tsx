@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { LineChart } from '@/components/ui'
 import { PropertySearchBar } from '@/components/property/PropertySearchBar'
-import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, MARKET_DATA } from '@/lib/market-data'
+import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcSection24, MARKET_DATA } from '@/lib/market-data'
+import type { Section24Result } from '@/lib/market-data'
 
 interface PropertyDetailProps {
   data: Record<string, unknown>
@@ -57,6 +58,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const [maintenance, setMaintenance] = useState(1.5)
   const [voidWks, setVoidWks] = useState(2)
   const [rentSet, setRentSet] = useState(false)
+  const [otherAnnualIncome, setOtherAnnualIncome] = useState(45000)
+  const [annualMortgageInterest, setAnnualMortgageInterest] = useState(0)
+  const [showSection24, setShowSection24] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
@@ -75,7 +79,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     return () => el.removeEventListener('scroll', handler)
   }, [])
 
-  // ── Data extraction ──────────────────────────────────────────────────────────
+  // ── Data extraction (unchanged) ──────────────────────────────────────────────
   const p        = data.property    as Record<string, unknown>
   const enriched = data.enriched    as Record<string, unknown>
   const epc      = data.epc         as Record<string, unknown> | null
@@ -111,7 +115,17 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
   const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
-  // ── EPC resolution ───────────────────────────────────────────────────────────
+  const section24Result: Section24Result | null = (() => {
+    if (!effectiveRent || !yieldPrice) return null
+    const mortInterest = annualMortgageInterest > 0
+      ? annualMortgageInterest
+      : mort
+      ? Math.round(mort.loan * (mortRate / 100))
+      : 0
+    return calcSection24(yieldPrice, effectiveRent, otherAnnualIncome, mortInterest, serviceCharge, groundRent, mgmtFee, maintenance, voidWks)
+  })()
+
+  // ── EPC resolution (epc register first — unchanged) ──────────────────────────
   const epcRaw = String(
     epc?.current_energy_rating ||
     epc?.currentEnergyRating ||
@@ -730,6 +744,129 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     <p className="text-xs text-[#6B7280] mt-4">
                       SDLT (additional property): <strong className="text-[#374151]">£{sdlt.toLocaleString()}</strong>
                     </p>
+                  )}
+                </div>
+
+                {/* ── Section 24 Tax Impact ──────────────────────────────────── */}
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                  <div className="flex items-start justify-between gap-3 mb-1 flex-wrap">
+                    <div>
+                      <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Section 24 Tax Impact</h3>
+                      <p className="text-xs text-[#9CA3AF] mt-0.5">Mortgage interest relief restricted to 20% basic-rate credit · 2026/27</p>
+                    </div>
+                  </div>
+
+                  {/* Inputs */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 mb-5">
+                    <div>
+                      <label className="block text-xs text-[#6B7280] mb-1.5">Your other annual income (£)</label>
+                      <input
+                        type="number"
+                        value={otherAnnualIncome || ''}
+                        onChange={e => setOtherAnnualIncome(Number(e.target.value))}
+                        placeholder="e.g. 45000"
+                        className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-2.5 text-[#111827] text-sm outline-none focus:border-[#047857] focus:ring-2 focus:ring-[#047857]/10"
+                      />
+                      <p className="text-[10px] text-[#9CA3AF] mt-1">Salary, dividends, other rental income</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-[#6B7280] mb-1.5">Annual mortgage interest (£) — optional override</label>
+                      <input
+                        type="number"
+                        value={annualMortgageInterest || ''}
+                        onChange={e => setAnnualMortgageInterest(Number(e.target.value))}
+                        placeholder={mort ? `Auto: £${Math.round(mort.loan * (mortRate / 100)).toLocaleString()}` : 'e.g. 8000'}
+                        className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-2.5 text-[#111827] text-sm outline-none focus:border-[#047857] focus:ring-2 focus:ring-[#047857]/10"
+                      />
+                      <p className="text-[10px] text-[#9CA3AF] mt-1">Leave blank to use mortgage modeller rate</p>
+                    </div>
+                  </div>
+
+                  {!section24Result ? (
+                    <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-5 py-6 text-center">
+                      <p className="text-sm text-[#9CA3AF]">Set a monthly rent above to calculate your Section 24 tax position.</p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Higher-rate warning */}
+                      {section24Result.pushesIntoHigher && (
+                        <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-xl px-4 py-3 mb-4 flex gap-3 items-start">
+                          <span className="text-lg shrink-0">⚠</span>
+                          <div>
+                            <p className="text-xs font-semibold text-[#B7791F]">This property pushes you into the higher-rate tax band</p>
+                            <p className="text-xs text-[#92400E] mt-0.5 leading-relaxed">
+                              Your rental profit takes total income above £{(50270).toLocaleString()}.
+                              Section 24 means you cannot deduct mortgage interest — only a 20% credit applies,
+                              resulting in effective tax above your marginal rate on the interest element.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Three KPI cards */}
+                      <div className="grid grid-cols-3 gap-3 mb-4">
+                        <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-4">
+                          <p className="text-[10px] uppercase tracking-[0.08em] text-[#047857] mb-1.5">Pre-Tax Net Income</p>
+                          <p className="font-bold text-lg text-[#047857]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                            £{(netMonthly).toLocaleString()}/mo
+                          </p>
+                          <p className="text-[10px] text-[#6B7280] mt-1">Before income tax</p>
+                        </div>
+                        <div className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-xl p-4">
+                          <p className="text-[10px] uppercase tracking-[0.08em] text-[#DC2626] mb-1.5">Tax Paid</p>
+                          <p className="font-bold text-lg text-[#DC2626]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                            £{Math.round(section24Result.totalTaxPaid / 12).toLocaleString()}/mo
+                          </p>
+                          <p className="text-[10px] text-[#6B7280] mt-1">{section24Result.taxBand} · {section24Result.effectiveRate}% eff.</p>
+                        </div>
+                        <div className={`border rounded-xl p-4 ${section24Result.afterTaxMonthly > 0 ? 'bg-[#ECFDF5] border-[#A7F3D0]' : 'bg-[#FEF2F2] border-[#FCA5A5]'}`}>
+                          <p className={`text-[10px] uppercase tracking-[0.08em] mb-1.5 ${section24Result.afterTaxMonthly > 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`}>After-Tax Income</p>
+                          <p className={`font-bold text-lg ${section24Result.afterTaxMonthly > 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`} style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                            £{section24Result.afterTaxMonthly.toLocaleString()}/mo
+                          </p>
+                          <p className="text-[10px] text-[#6B7280] mt-1">Net of all costs &amp; tax</p>
+                        </div>
+                      </div>
+
+                      {/* Detailed breakdown toggle */}
+                      <button
+                        onClick={() => setShowSection24(v => !v)}
+                        className="w-full text-xs font-semibold text-[#047857] py-2.5 border border-[#A7F3D0] bg-[#ECFDF5] rounded-xl hover:bg-[#D1FAE5] transition-colors mb-4">
+                        {showSection24 ? 'Hide calculation ↑' : 'Show calculation ↓'}
+                      </button>
+
+                      {/* Detailed breakdown */}
+                      {showSection24 && (() => {
+                        const annualRentDisplay = Math.round(effectiveRent * ((52 - voidWks) / 52) * 12)
+                        const allowableExpDisplay = annualRentDisplay - section24Result.taxableProfit
+                        return (
+                          <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4 mb-4">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF] mb-3">Calculation Breakdown (annual)</p>
+                            {[
+                              { k: 'Gross annual rent after voids',       v: `£${annualRentDisplay.toLocaleString()}`,                             col: 'text-[#047857]' },
+                              { k: 'Less allowable expenses',             v: `-£${allowableExpDisplay.toLocaleString()}`,                          col: 'text-[#DC2626]' },
+                              { k: 'Taxable rental profit',               v: `£${section24Result.taxableProfit.toLocaleString()}`,                 col: 'text-[#111827] font-semibold' },
+                              { k: `Income tax (${section24Result.taxBand})`, v: `-£${section24Result.incomeTaxOnRent.toLocaleString()}`,          col: 'text-[#DC2626]' },
+                              { k: 'Section 24 credit (20% of interest)', v: `+£${section24Result.section24Credit.toLocaleString()}`,              col: 'text-[#047857]' },
+                              { k: 'Net tax paid on rental income',       v: `-£${section24Result.totalTaxPaid.toLocaleString()}`,                 col: 'text-[#DC2626] font-semibold' },
+                            ].map(row => (
+                              <div key={row.k} className="flex justify-between py-2 border-b border-[#F3F4F6] last:border-0 text-sm">
+                                <span className="text-[#475569]">{row.k}</span>
+                                <span className={row.col}>{row.v}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })()}
+
+                      {/* Disclaimer */}
+                      <p className="text-[10px] text-[#9CA3AF] leading-relaxed">
+                        This is an estimate for illustrative purposes only. It does not constitute tax advice.
+                        Consult a qualified accountant or tax adviser before making investment decisions.
+                        Figures use 2026/27 UK income tax thresholds. Interest shown is year-1 approximate;
+                        actual deductible interest varies by lender and repayment schedule.
+                      </p>
+                    </>
                   )}
                 </div>
               </div>
