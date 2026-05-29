@@ -1,15 +1,16 @@
 'use client'
 
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
+import { MARKET_DATA } from '@/lib/market-data'
 
 const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
+const ALL_CITY_KEYS = Object.keys(MARKET_DATA.cities)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type FinderTab = 'ai' | 'custom' | 'saved'
 type SortBy = 'matchScore' | 'grossYield' | 'estimatedValue' | 'epc'
 type TenureFilter = 'any' | 'freehold' | 'leasehold'
-type EpcFilter = 'any' | 'a-c' | 'a-d' | 'exclude-e-f-g'
 
 interface PropertyFinderResult {
   uprn: string | null
@@ -46,7 +47,6 @@ interface PropertyFinderCriteria {
   propertyTypes: string[]
   minBedrooms: number
   maxBedrooms: number
-  epcPreference: EpcFilter
   tenure: TenureFilter
 }
 
@@ -64,7 +64,7 @@ interface FavBenchmarkItem {
 export interface PropertyFinderProps {
   favouriteItems: Array<Record<string, unknown>>
   favourites: Set<string>
-  onToggleFavourite: (uprn: string) => void
+  onToggleFavourite: (property: Record<string, unknown>) => void
   onAddToPortfolio: (data: Record<string, unknown>) => void
   onOpenAnalysis: (data: Record<string, unknown>) => void
   onGoToDiscover: () => void
@@ -172,7 +172,7 @@ function scoreCandidate(
     else score += 5
   } else score += 7
 
-  // City match from criteria — 10 pts (partial if not filtering by city)
+  // City match — 10 pts (partial)
   score += 5
 
   // Criteria filters penalty
@@ -182,14 +182,6 @@ function scoreCandidate(
   const clamped = Math.max(0, Math.min(100, Math.round(score)))
   const label = clamped >= 90 ? 'Excellent' : clamped >= 80 ? 'Very good' : clamped >= 70 ? 'Good' : 'Fair'
   return { score: clamped, label, reasons: Array.from(new Set(reasons)) }
-}
-
-function applyEpcFilter(epc: string | null, pref: EpcFilter): boolean {
-  if (pref === 'any' || epc === null) return true
-  if (pref === 'a-c') return epc <= 'C'
-  if (pref === 'a-d') return epc <= 'D'
-  if (pref === 'exclude-e-f-g') return epc <= 'D'
-  return true
 }
 
 function reasonBox(result: PropertyFinderResult, benchmarkCities: string[]): {
@@ -400,44 +392,6 @@ function ResultCard({
   )
 }
 
-// ── Area search box (shared between tabs) ─────────────────────────────────────
-
-function AreaSearchBox({
-  value,
-  onChange,
-  loading,
-  error,
-}: {
-  value: string
-  onChange: (v: string) => void
-  loading: boolean
-  error: string | null
-}) {
-  return (
-    <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-      <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Search an area</h3>
-      <div className="relative">
-        <input
-          type="text"
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          placeholder="Type a postcode, area or city (e.g. M4, NG7, Ancoats, Manchester)"
-          className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-3 text-sm text-[#111827] placeholder-[#9CA3AF] outline-none focus:border-[#047857] pr-10"
-        />
-        {loading && (
-          <div className="absolute right-3 top-1/2 -translate-y-1/2">
-            <Spinner className="w-4 h-4" />
-          </div>
-        )}
-      </div>
-      {error && <p className="text-xs text-[#DC2626] mt-2">{error}</p>}
-      <p className="text-[11px] text-[#9CA3AF] mt-2">
-        Property Finder shows only real properties from Portfolai&apos;s live data sources.
-      </p>
-    </div>
-  )
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function PropertyFinder({
@@ -447,14 +401,21 @@ export function PropertyFinder({
 }: PropertyFinderProps) {
   const [finderTab, setFinderTab] = useState<FinderTab>('ai')
   const [sortBy, setSortBy] = useState<SortBy>('matchScore')
-  const [areaSearch, setAreaSearch] = useState('')
-  const [rawCandidates, setRawCandidates] = useState<PropertyFinderResult[]>([])
-  const [loadingCandidates, setLoadingCandidates] = useState(false)
-  const [finderError, setFinderError] = useState<string | null>(null)
+
+  // AI tab state
+  const [aiRawCandidates, setAiRawCandidates] = useState<PropertyFinderResult[]>([])
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiAutoSearchDone, setAiAutoSearchDone] = useState(false)
+
+  // Custom tab state
+  const [selectedCustomCities, setSelectedCustomCities] = useState<string[]>([])
+  const [customRawCandidates, setCustomRawCandidates] = useState<PropertyFinderResult[]>([])
+  const [customLoading, setCustomLoading] = useState(false)
+  const [customError, setCustomError] = useState<string | null>(null)
+
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrors, setOpenErrors] = useState<Record<string, string>>({})
   const [finderFavs, setFinderFavs] = useState<Set<string>>(new Set())
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // ── Benchmark (derived from real favouriteItems) ───────────────────────────
   const favBenchmarks = useMemo(() => extractFavBenchmarks(favouriteItems), [favouriteItems])
@@ -478,7 +439,6 @@ export function PropertyFinder({
     propertyTypes: [],
     minBedrooms: 1,
     maxBedrooms: 5,
-    epcPreference: 'any',
     tenure: 'any',
   })
 
@@ -489,49 +449,77 @@ export function PropertyFinder({
     propertyTypes: benchmarkProfile?.propertyTypes ?? [],
     minBedrooms: benchmarkProfile?.minBedrooms ?? 1,
     maxBedrooms: benchmarkProfile?.maxBedrooms ?? 5,
-    epcPreference: 'any',
     tenure: 'any',
   }), [benchmarkProfile])
 
-  // ── Fetch real candidates from backend ────────────────────────────────────
-  const fetchCandidates = useCallback(async (query: string) => {
-    if (query.trim().length < 3) { setRawCandidates([]); return }
-    setLoadingCandidates(true)
-    setFinderError(null)
-    try {
-      const res = await fetch(`/api/property?q=${encodeURIComponent(query)}`)
-      if (!res.ok) throw new Error(`Search failed: ${res.status}`)
-      const data = await res.json()
-      const suggestions = (data.suggestions ?? []) as Array<Record<string, unknown>>
-      const results = suggestions.map(mapSuggestionToResult)
-      if (process.env.NODE_ENV === 'development') {
-        console.debug('[property-finder:data-source]', {
-          query,
-          resultCount: results.length,
-          source: 'api',
-          hasHardcodedCandidates: false,
-          withUprn: results.filter(r => r.uprn).length,
-        })
-      }
-      setRawCandidates(results)
-    } catch (err) {
-      console.error('[property-finder] search failed', err)
-      setFinderError('Search failed. Please check your connection and try again.')
-      setRawCandidates([])
-    } finally {
-      setLoadingCandidates(false)
-    }
-  }, [])
-
+  // ── Auto-fetch for AI tab from favourite outcodes/cities ──────────────────
   useEffect(() => {
-    clearTimeout(debounceRef.current)
-    if (areaSearch.trim().length >= 3) {
-      debounceRef.current = setTimeout(() => fetchCandidates(areaSearch), 400)
-    } else {
-      setRawCandidates([])
+    const activeBenchmarks = favBenchmarks.filter(b => selectedBenchmarkIds.includes(b.id))
+    if (!activeBenchmarks.length) {
+      setAiRawCandidates([])
+      setAiAutoSearchDone(false)
+      return
     }
-    return () => clearTimeout(debounceRef.current)
-  }, [areaSearch, fetchCandidates])
+    const outcodes = Array.from(new Set(activeBenchmarks.map(b => b.outcode).filter(Boolean)))
+    const cities = Array.from(new Set(activeBenchmarks.map(b => b.city).filter(Boolean)))
+    const queries = outcodes.length ? outcodes.slice(0, 3) : cities.slice(0, 3)
+    if (!queries.length) return
+
+    setAiLoading(true)
+    setAiAutoSearchDone(false)
+
+    Promise.all(
+      queries.map(q =>
+        fetch(`/api/property?q=${encodeURIComponent(q)}`)
+          .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+          .then(data => (data.suggestions ?? []) as Array<Record<string, unknown>>)
+          .catch(() => [] as Array<Record<string, unknown>>)
+      )
+    ).then(resultsArrays => {
+      const seen = new Set<string>()
+      const all: PropertyFinderResult[] = []
+      for (const arr of resultsArrays) {
+        for (const s of arr) {
+          const key = String(s.uprn ?? s.address ?? '')
+          if (!seen.has(key)) { seen.add(key); all.push(mapSuggestionToResult(s)) }
+        }
+      }
+      setAiRawCandidates(all)
+    }).catch(() => {
+      setAiRawCandidates([])
+    }).finally(() => {
+      setAiLoading(false)
+      setAiAutoSearchDone(true)
+    })
+  }, [favBenchmarks, selectedBenchmarkIds])
+
+  // ── Auto-fetch for Custom tab from selected cities ────────────────────────
+  useEffect(() => {
+    if (!selectedCustomCities.length) { setCustomRawCandidates([]); return }
+    setCustomLoading(true)
+    setCustomError(null)
+    Promise.all(
+      selectedCustomCities.slice(0, 4).map(city =>
+        fetch(`/api/property?q=${encodeURIComponent(city)}`)
+          .then(r => r.ok ? r.json() : Promise.reject())
+          .then(data => (data.suggestions ?? []) as Array<Record<string, unknown>>)
+          .catch(() => [] as Array<Record<string, unknown>>)
+      )
+    ).then(resultsArrays => {
+      const seen = new Set<string>()
+      const all: PropertyFinderResult[] = []
+      for (const arr of resultsArrays) {
+        for (const s of arr) {
+          const key = String(s.uprn ?? s.address ?? '')
+          if (!seen.has(key)) { seen.add(key); all.push(mapSuggestionToResult(s)) }
+        }
+      }
+      setCustomRawCandidates(all)
+    }).catch(() => {
+      setCustomError('Search failed. Please try again.')
+      setCustomRawCandidates([])
+    }).finally(() => setCustomLoading(false))
+  }, [selectedCustomCities])
 
   // ── Canonical open-analysis flow ─────────────────────────────────────────
   const openVerifiedAnalysis = useCallback(async (result: PropertyFinderResult) => {
@@ -561,10 +549,6 @@ export function PropertyFinder({
           [cardId]: 'Unable to open analysis — property could not be matched to a verified UPRN. Try searching for it manually.',
         }))
         return
-      }
-
-      if (process.env.NODE_ENV === 'development') {
-        console.debug('[property-finder:open-analysis]', { uprn, address: result.address, source: 'canonical-api' })
       }
 
       const res = await fetch(`/api/property?uprn=${encodeURIComponent(uprn)}`)
@@ -602,14 +586,14 @@ export function PropertyFinder({
 
   // ── Score candidates against benchmark ────────────────────────────────────
   const scoredAiCandidates = useMemo<PropertyFinderResult[]>(() => {
-    return rawCandidates.map(c => {
+    return aiRawCandidates.map(c => {
       const { score, label, reasons } = scoreCandidate(c, benchmarkProfile, aiCriteria)
       return { ...c, matchScore: score, matchLabel: label, matchReasons: reasons }
     })
-  }, [rawCandidates, benchmarkProfile, aiCriteria])
+  }, [aiRawCandidates, benchmarkProfile, aiCriteria])
 
   const scoredCustomCandidates = useMemo<PropertyFinderResult[]>(() => {
-    return rawCandidates
+    return customRawCandidates
       .filter(c => {
         if (c.grossYield != null && c.grossYield < customCriteria.targetGrossYield) return false
         if (c.estimatedValue != null &&
@@ -618,16 +602,16 @@ export function PropertyFinder({
           !customCriteria.propertyTypes.includes(c.property_type)) return false
         if (c.bedrooms != null &&
           (c.bedrooms < customCriteria.minBedrooms || c.bedrooms > customCriteria.maxBedrooms)) return false
-        if (!applyEpcFilter(c.epcRating, customCriteria.epcPreference)) return false
         return true
       })
       .map(c => {
         const { score, label, reasons } = scoreCandidate(c, benchmarkProfile, customCriteria)
         return { ...c, matchScore: score, matchLabel: label, matchReasons: reasons }
       })
-  }, [rawCandidates, customCriteria, benchmarkProfile])
+  }, [customRawCandidates, customCriteria, benchmarkProfile])
 
   const activeResults = finderTab === 'ai' ? scoredAiCandidates : scoredCustomCandidates
+  const isLoadingCandidates = finderTab === 'ai' ? aiLoading : customLoading
 
   const sortedResults = useMemo(() => {
     const copy = [...activeResults]
@@ -656,20 +640,9 @@ export function PropertyFinder({
       .sort((a, b) => (b.grossYield ?? 0) - (a.grossYield ?? 0))[0] ?? null
   }, [scoredAiCandidates, benchmarkProfile])
 
-  const hasSearched = areaSearch.trim().length >= 3
   const hasResults = sortedResults.length > 0
 
-  // ── Empty / loading states ────────────────────────────────────────────────
-  const emptySearch = (
-    <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-      <p className="text-4xl mb-3">🔍</p>
-      <p className="font-semibold text-[#374151] mb-2">Search an area to find matching properties</p>
-      <p className="text-sm text-[#6B7280] max-w-[420px] mx-auto">
-        Property Finder only shows real properties returned by Portfolai&apos;s live data sources. Type a postcode, area name or city above.
-      </p>
-    </div>
-  )
-
+  // ── Shared states ─────────────────────────────────────────────────────────
   const loadingState = (
     <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
       <Spinner className="w-8 h-8 mx-auto mb-4" />
@@ -677,16 +650,26 @@ export function PropertyFinder({
     </div>
   )
 
-  const noResults = (
+  const noResultsAi = (
+    <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
+      <p className="text-4xl mb-3">🔍</p>
+      <p className="font-semibold text-[#374151] mb-2">No AI matches found for these areas</p>
+      <p className="text-sm text-[#6B7280] max-w-[420px] mx-auto mb-4">
+        Portfolai searched your favourite property areas but no results were returned. Try adjusting your benchmark selection.
+      </p>
+    </div>
+  )
+
+  const noResultsCustom = (
     <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
       <p className="text-4xl mb-3">🔍</p>
       <p className="font-semibold text-[#374151] mb-2">No verified matching properties found</p>
       <p className="text-sm text-[#6B7280] max-w-[420px] mx-auto mb-4">
-        Property Finder only shows real properties returned by Portfolai&apos;s live data sources. Try widening your filters or searching a different area.
+        Try widening your filters or selecting different cities.
       </p>
-      <button type="button" onClick={() => setAreaSearch('')}
+      <button type="button" onClick={() => setCustomCriteria(p => ({ ...p, propertyTypes: [], targetGrossYield: 3 }))}
         className="text-sm font-semibold text-[#047857] border border-[#A7F3D0] bg-[#ECFDF5] px-4 py-2 rounded-xl hover:bg-[#D1FAE5] transition-colors">
-        Adjust search
+        Reset filters
       </button>
     </div>
   )
@@ -744,7 +727,7 @@ export function PropertyFinder({
                 <p className="text-3xl mb-3">☆</p>
                 <p className="text-sm font-semibold text-[#374151] mb-1">Favourite properties to unlock AI recommendations</p>
                 <p className="text-xs text-[#9CA3AF] mb-4 max-w-[360px] mx-auto">
-                  Save properties you like and Portfolai will find similar or better opportunities.
+                  Save properties you like and Portfolai will find similar or better opportunities automatically.
                 </p>
                 <button type="button" onClick={onGoToDiscover}
                   className="bg-[#047857] text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-[#065F46] transition-colors">
@@ -752,157 +735,152 @@ export function PropertyFinder({
                 </button>
               </div>
             ) : (
-              <>
-                <div className="flex gap-2 flex-wrap mb-4">
-                  {favBenchmarks.map(b => {
-                    const isSelected = selectedBenchmarkIds.includes(b.id)
-                    return (
-                      <button key={b.id} type="button" onClick={() => toggleBenchmark(b.id)} aria-pressed={isSelected}
-                        className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-all ${
-                          isSelected ? 'bg-[#ECFDF5] border-[#A7F3D0] text-[#047857]' : 'bg-[#F6F3EC] border-[#E7E5DD] text-[#6B7280]'
-                        }`}>
-                        <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${isSelected ? 'bg-[#047857] border-[#047857]' : 'border-[#D1D5DB]'}`}>
-                          {isSelected && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                        </span>
-                        <span>{b.label}</span>
-                        {b.grossYield > 0 && <span className="text-[#047857] font-semibold">{b.grossYield.toFixed(1)}%</span>}
-                        {b.propertyType && <span className="text-[#9CA3AF]">· {b.propertyType}</span>}
-                        {b.bedrooms > 0 && <span className="text-[#9CA3AF]">· {b.bedrooms} bed</span>}
-                      </button>
-                    )
-                  })}
-                </div>
-                {benchmarkProfile && (
-                  <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-3">
-                    <p className="text-xs text-[#374151] leading-relaxed">
-                      <span className="font-semibold text-[#047857]">🤖 AI matching:</span>{' '}
-                      {benchmarkProfile.propertyTypes.length ? benchmarkProfile.propertyTypes.join(' or ') : 'any type'}{' '}
-                      · {benchmarkProfile.minBedrooms}–{benchmarkProfile.maxBedrooms} beds{' '}
-                      · yield ≥{(benchmarkProfile.avgGrossYield - 0.5).toFixed(1)}%{' '}
-                      · {fmtVal(benchmarkProfile.minValue)}–{fmtVal(benchmarkProfile.maxValue)}
-                    </p>
-                  </div>
-                )}
-              </>
+              <div className="flex gap-2 flex-wrap">
+                {favBenchmarks.map(b => {
+                  const isSelected = selectedBenchmarkIds.includes(b.id)
+                  return (
+                    <button key={b.id} type="button" onClick={() => toggleBenchmark(b.id)} aria-pressed={isSelected}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-all ${
+                        isSelected ? 'bg-[#ECFDF5] border-[#A7F3D0] text-[#047857]' : 'bg-[#F6F3EC] border-[#E7E5DD] text-[#6B7280]'
+                      }`}>
+                      <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${isSelected ? 'bg-[#047857] border-[#047857]' : 'border-[#D1D5DB]'}`}>
+                        {isSelected && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                      </span>
+                      <span>{b.label}</span>
+                      {b.grossYield > 0 && <span className="text-[#047857] font-semibold">{b.grossYield.toFixed(1)}%</span>}
+                      {b.propertyType && <span className="text-[#9CA3AF]">· {b.propertyType}</span>}
+                      {b.bedrooms > 0 && <span className="text-[#9CA3AF]">· {b.bedrooms} bed</span>}
+                    </button>
+                  )
+                })}
+              </div>
             )}
           </div>
 
-          {/* Search */}
-          <AreaSearchBox
-            value={areaSearch}
-            onChange={setAreaSearch}
-            loading={loadingCandidates}
-            error={finderError}
-          />
-
-          {/* Comparison strip — only when we have real results and a benchmark */}
-          {benchmarkBest && bestCrossCity && (
-            <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] overflow-hidden">
-              <div className="grid grid-cols-1 md:grid-cols-[1fr_1px_1fr]">
-                <div className="p-5">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Your benchmark</p>
-                  <p className="text-sm font-semibold text-[#111827]" style={{ fontFamily: SERIF }}>
-                    {benchmarkBest.outcode || benchmarkBest.city}
-                  </p>
-                  <div className="flex items-center gap-3 mt-2 flex-wrap">
-                    {benchmarkBest.grossYield > 0 && <span className="text-[11px] text-[#6B7280]">{benchmarkBest.grossYield.toFixed(1)}% yield</span>}
-                    {benchmarkBest.estimatedValue > 0 && <span className="text-[11px] text-[#6B7280]">{fmtVal(benchmarkBest.estimatedValue)}</span>}
-                    {benchmarkBest.propertyType && <span className="text-[11px] text-[#6B7280]">{benchmarkBest.propertyType}</span>}
-                    {benchmarkBest.bedrooms > 0 && <span className="text-[11px] text-[#6B7280]">{benchmarkBest.bedrooms} bed</span>}
+          {/* Only render results area when there are favourites */}
+          {favBenchmarks.length > 0 && (
+            <>
+              {/* Comparison strip — only when we have results and a benchmark */}
+              {benchmarkBest && bestCrossCity && (
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] overflow-hidden">
+                  <div className="grid grid-cols-1 md:grid-cols-[1fr_1px_1fr]">
+                    <div className="p-5">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Your benchmark</p>
+                      <p className="text-sm font-semibold text-[#111827]" style={{ fontFamily: SERIF }}>
+                        {benchmarkBest.outcode || benchmarkBest.city}
+                      </p>
+                      <div className="flex items-center gap-3 mt-2 flex-wrap">
+                        {benchmarkBest.grossYield > 0 && <span className="text-[11px] text-[#6B7280]">{benchmarkBest.grossYield.toFixed(1)}% yield</span>}
+                        {benchmarkBest.estimatedValue > 0 && <span className="text-[11px] text-[#6B7280]">{fmtVal(benchmarkBest.estimatedValue)}</span>}
+                        {benchmarkBest.propertyType && <span className="text-[11px] text-[#6B7280]">{benchmarkBest.propertyType}</span>}
+                        {benchmarkBest.bedrooms > 0 && <span className="text-[11px] text-[#6B7280]">{benchmarkBest.bedrooms} bed</span>}
+                      </div>
+                    </div>
+                    <div className="hidden md:block w-px bg-[#E7E5DD]" />
+                    <div className="p-5 bg-[#F6FFF8]">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#047857] mb-1">Best cross-area match</p>
+                      <p className="text-sm font-semibold text-[#047857]" style={{ fontFamily: SERIF }}>
+                        {bestCrossCity.city}{bestCrossCity.area ? ` · ${bestCrossCity.area}` : ''}
+                      </p>
+                      <div className="flex items-center gap-3 mt-2 flex-wrap">
+                        {bestCrossCity.grossYield != null && (
+                          <span className="text-[11px] font-semibold text-[#047857]">{bestCrossCity.grossYield.toFixed(1)}% yield</span>
+                        )}
+                        {bestCrossCity.estimatedValue != null && (
+                          <span className="text-[11px] text-[#047857]">{fmtVal(bestCrossCity.estimatedValue)}</span>
+                        )}
+                        {bestCrossCity.estimatedValue != null && bestCrossCity.estimatedValue < benchmarkBest.estimatedValue && (
+                          <span className="text-[11px] bg-[#ECFDF5] text-[#047857] font-semibold px-2 py-0.5 rounded-full border border-[#A7F3D0]">
+                            saves {fmtVal(benchmarkBest.estimatedValue - bestCrossCity.estimatedValue)}
+                          </span>
+                        )}
+                        {bestCrossCity.grossYield != null && bestCrossCity.grossYield > benchmarkBest.grossYield && (
+                          <span className="text-[11px] bg-[#ECFDF5] text-[#047857] font-semibold px-2 py-0.5 rounded-full border border-[#A7F3D0]">
+                            +{(bestCrossCity.grossYield - benchmarkBest.grossYield).toFixed(1)}% yield
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="hidden md:block w-px bg-[#E7E5DD]" />
-                <div className="p-5 bg-[#F6FFF8]">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#047857] mb-1">Best cross-area match</p>
-                  <p className="text-sm font-semibold text-[#047857]" style={{ fontFamily: SERIF }}>
-                    {bestCrossCity.city}{bestCrossCity.area ? ` · ${bestCrossCity.area}` : ''}
+              )}
+
+              {/* Results header */}
+              {aiAutoSearchDone && !aiLoading && hasResults && (
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <p className="text-sm font-semibold text-[#374151]">
+                    <span className="text-[#111827]">{sortedResults.length}</span> {sortedResults.length === 1 ? 'match' : 'matches'}
+                    {citiesInResults > 0 && <> across <span className="text-[#111827]">{citiesInResults}</span> {citiesInResults === 1 ? 'city' : 'cities'}</>}
                   </p>
-                  <div className="flex items-center gap-3 mt-2 flex-wrap">
-                    {bestCrossCity.grossYield != null && (
-                      <span className="text-[11px] font-semibold text-[#047857]">{bestCrossCity.grossYield.toFixed(1)}% yield</span>
-                    )}
-                    {bestCrossCity.estimatedValue != null && (
-                      <span className="text-[11px] text-[#047857]">{fmtVal(bestCrossCity.estimatedValue)}</span>
-                    )}
-                    {bestCrossCity.estimatedValue != null && bestCrossCity.estimatedValue < benchmarkBest.estimatedValue && (
-                      <span className="text-[11px] bg-[#ECFDF5] text-[#047857] font-semibold px-2 py-0.5 rounded-full border border-[#A7F3D0]">
-                        saves {fmtVal(benchmarkBest.estimatedValue - bestCrossCity.estimatedValue)}
-                      </span>
-                    )}
-                    {bestCrossCity.grossYield != null && bestCrossCity.grossYield > benchmarkBest.grossYield && (
-                      <span className="text-[11px] bg-[#ECFDF5] text-[#047857] font-semibold px-2 py-0.5 rounded-full border border-[#A7F3D0]">
-                        +{(bestCrossCity.grossYield - benchmarkBest.grossYield).toFixed(1)}% yield
-                      </span>
-                    )}
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-[#6B7280]">Sort:</label>
+                    <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)}
+                      className="bg-white border border-[#E7E5DD] text-xs font-medium text-[#374151] rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
+                      <option value="matchScore">Match score</option>
+                      <option value="grossYield">Highest gross yield</option>
+                      <option value="estimatedValue">Lowest value</option>
+                      <option value="epc">EPC rating</option>
+                    </select>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
+              )}
 
-          {/* Results header */}
-          {hasSearched && !loadingCandidates && hasResults && (
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <p className="text-sm font-semibold text-[#374151]">
-                <span className="text-[#111827]">{sortedResults.length}</span> {sortedResults.length === 1 ? 'match' : 'matches'}
-                {citiesInResults > 0 && <> across <span className="text-[#111827]">{citiesInResults}</span> {citiesInResults === 1 ? 'city' : 'cities'}</>}
-              </p>
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-[#6B7280]">Sort:</label>
-                <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)}
-                  className="bg-white border border-[#E7E5DD] text-xs font-medium text-[#374151] rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
-                  <option value="matchScore">Match score</option>
-                  <option value="grossYield">Highest gross yield</option>
-                  <option value="estimatedValue">Lowest value</option>
-                  <option value="epc">EPC rating</option>
-                </select>
-              </div>
-            </div>
-          )}
+              {/* Results or loading/empty states */}
+              {(aiLoading || !aiAutoSearchDone) ? loadingState :
+               !hasResults ? noResultsAi : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {sortedResults.map((result, i) => {
+                    const cardId = result.uprn ?? result.address
+                    return (
+                      <ResultCard
+                        key={result.uprn ?? `result-${i}`}
+                        result={result}
+                        isFav={finderFavs.has(cardId)}
+                        benchmarkCities={benchmarkProfile?.cities ?? []}
+                        isOpening={openingId === cardId}
+                        openError={openErrors[cardId] ?? null}
+                        onToggleFav={() => toggleFinderFav(cardId)}
+                        onOpen={() => openVerifiedAnalysis(result)}
+                      />
+                    )
+                  })}
+                </div>
+              )}
 
-          {/* Results or state */}
-          {!hasSearched ? emptySearch :
-           loadingCandidates ? loadingState :
-           !hasResults ? noResults : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {sortedResults.map((result, i) => {
-                const cardId = result.uprn ?? result.address
-                return (
-                  <ResultCard
-                    key={result.uprn ?? `result-${i}`}
-                    result={result}
-                    isFav={finderFavs.has(cardId)}
-                    benchmarkCities={benchmarkProfile?.cities ?? []}
-                    isOpening={openingId === cardId}
-                    openError={openErrors[cardId] ?? null}
-                    onToggleFav={() => toggleFinderFav(cardId)}
-                    onOpen={() => openVerifiedAnalysis(result)}
-                  />
-                )
-              })}
-            </div>
-          )}
-
-          {hasResults && (
-            <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-              <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Why these results?</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
-                {[
-                  { icon: '★',  label: 'Matched to your favourites', color: 'text-[#B7791F]' },
-                  { icon: '📈', label: 'High yield potential',        color: 'text-[#047857]' },
-                  { icon: '⊞',  label: 'Strong type similarity',      color: 'text-[#047857]' },
-                  { icon: '🏙', label: 'Area momentum',               color: 'text-[#374151]' },
-                ].map(it => (
-                  <div key={it.label} className="text-center">
-                    <p className={`text-2xl mb-1 ${it.color}`}>{it.icon}</p>
-                    <p className="text-[11px] text-[#6B7280] leading-snug">{it.label}</p>
+              {/* Why these matches? */}
+              {aiAutoSearchDone && hasResults && (
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Why these matches?</h3>
+                  {benchmarkProfile && (
+                    <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-3 mb-4">
+                      <p className="text-xs text-[#374151] leading-relaxed">
+                        <span className="font-semibold text-[#047857]">🤖 AI matching:</span>{' '}
+                        {benchmarkProfile.propertyTypes.length ? benchmarkProfile.propertyTypes.join(' or ') : 'any type'}{' '}
+                        · {benchmarkProfile.minBedrooms}–{benchmarkProfile.maxBedrooms} beds{' '}
+                        · yield ≥{(benchmarkProfile.avgGrossYield - 0.5).toFixed(1)}%{' '}
+                        · {fmtVal(benchmarkProfile.minValue)}–{fmtVal(benchmarkProfile.maxValue)}
+                      </p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                    {[
+                      { icon: '★',  label: 'Matched to your favourites', color: 'text-[#B7791F]' },
+                      { icon: '📈', label: 'High yield potential',        color: 'text-[#047857]' },
+                      { icon: '⊞',  label: 'Strong type similarity',      color: 'text-[#047857]' },
+                      { icon: '🏙', label: 'Area momentum',               color: 'text-[#374151]' },
+                    ].map(it => (
+                      <div key={it.label} className="text-center">
+                        <p className={`text-2xl mb-1 ${it.color}`}>{it.icon}</p>
+                        <p className="text-[11px] text-[#6B7280] leading-snug">{it.label}</p>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <p className="text-xs text-[#9CA3AF] leading-relaxed">
-                The more properties you favourite and analyse, the smarter your recommendations become.
-              </p>
-            </div>
+                  <p className="text-xs text-[#9CA3AF] leading-relaxed">
+                    The more properties you favourite and analyse, the smarter your recommendations become.
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -914,7 +892,43 @@ export function PropertyFinder({
 
             {/* Left: filters */}
             <div className="space-y-5">
-              <AreaSearchBox value={areaSearch} onChange={setAreaSearch} loading={loadingCandidates} error={finderError} />
+
+              {/* City multi-select */}
+              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
+                <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Search cities</h3>
+                <div className="flex gap-2 flex-wrap">
+                  {ALL_CITY_KEYS.map(city => {
+                    const selected = selectedCustomCities.includes(city)
+                    return (
+                      <button key={city} type="button" aria-pressed={selected}
+                        onClick={() => setSelectedCustomCities(prev =>
+                          selected ? prev.filter(c => c !== city) : [...prev, city]
+                        )}
+                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                          selected ? 'bg-[#047857] border-[#047857] text-white' : 'bg-white border-[#E7E5DD] text-[#6B7280] hover:border-[#047857]'
+                        }`}>
+                        {city}
+                      </button>
+                    )
+                  })}
+                  {selectedCustomCities.length > 0 && (
+                    <button type="button"
+                      onClick={() => setSelectedCustomCities([])}
+                      className="px-3 py-1.5 rounded-full text-xs text-[#9CA3AF] hover:text-[#374151]">
+                      Clear all
+                    </button>
+                  )}
+                </div>
+                {selectedCustomCities.length === 0 && (
+                  <p className="text-[11px] text-[#9CA3AF] mt-2">Select one or more cities to search</p>
+                )}
+                {customLoading && (
+                  <p className="text-[11px] text-[#9CA3AF] mt-2 flex items-center gap-1.5">
+                    <Spinner className="w-3 h-3" /> Searching live properties…
+                  </p>
+                )}
+                {customError && <p className="text-xs text-[#DC2626] mt-2">{customError}</p>}
+              </div>
 
               {/* Yield */}
               <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
@@ -1001,40 +1015,19 @@ export function PropertyFinder({
                 </div>
               </div>
 
-              {/* Tenure + EPC */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Tenure</h3>
-                  <div className="flex rounded-xl border border-[#E7E5DD] overflow-hidden">
-                    {(['any', 'freehold', 'leasehold'] as TenureFilter[]).map(val => (
-                      <button key={val} type="button"
-                        onClick={() => setCustomCriteria(p => ({ ...p, tenure: val }))}
-                        className={`flex-1 py-2 text-xs font-medium capitalize transition-colors ${
-                          customCriteria.tenure === val ? 'bg-[#047857] text-white' : 'bg-white text-[#374151] hover:bg-[#F6F3EC]'
-                        }`}>
-                        {val === 'any' ? 'Any' : val.charAt(0).toUpperCase() + val.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                  <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">EPC preference</h3>
-                  <div className="flex flex-col gap-1.5">
-                    {([['any', 'Any rating'], ['a-c', 'A–C only'], ['a-d', 'A–D only'], ['exclude-e-f-g', 'Exclude E/F/G']] as const).map(([val, label]) => (
-                      <button key={val} type="button"
-                        onClick={() => setCustomCriteria(p => ({ ...p, epcPreference: val }))}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium text-left transition-colors ${
-                          customCriteria.epcPreference === val ? 'bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]' : 'text-[#6B7280] hover:bg-[#F6F3EC]'
-                        }`}>
-                        <span className={`w-3 h-3 rounded-full border flex items-center justify-center shrink-0 ${
-                          customCriteria.epcPreference === val ? 'bg-[#047857] border-[#047857]' : 'border-[#D1D5DB]'
-                        }`}>
-                          {customCriteria.epcPreference === val && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
-                        </span>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+              {/* Tenure */}
+              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
+                <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Tenure</h3>
+                <div className="flex rounded-xl border border-[#E7E5DD] overflow-hidden">
+                  {(['any', 'freehold', 'leasehold'] as TenureFilter[]).map(val => (
+                    <button key={val} type="button"
+                      onClick={() => setCustomCriteria(p => ({ ...p, tenure: val }))}
+                      className={`flex-1 py-2 text-xs font-medium capitalize transition-colors ${
+                        customCriteria.tenure === val ? 'bg-[#047857] text-white' : 'bg-white text-[#374151] hover:bg-[#F6F3EC]'
+                      }`}>
+                      {val === 'any' ? 'Any' : val.charAt(0).toUpperCase() + val.slice(1)}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
@@ -1043,16 +1036,16 @@ export function PropertyFinder({
             <div className="space-y-4">
               <div className="bg-white border border-[#A7F3D0] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
                 <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">
-                  {!hasSearched ? 'Search an area above' :
-                   loadingCandidates ? 'Searching…' :
+                  {selectedCustomCities.length === 0 ? 'Select a city above' :
+                   customLoading ? 'Searching…' :
                    `${scoredCustomCandidates.length} matching ${scoredCustomCandidates.length === 1 ? 'property' : 'properties'}`}
                 </p>
-                {!hasSearched ? (
+                {selectedCustomCities.length === 0 ? (
                   <div className="text-center py-8">
-                    <p className="text-2xl mb-2">🔍</p>
-                    <p className="text-sm text-[#9CA3AF]">Enter a postcode or area above</p>
+                    <p className="text-2xl mb-2">🏙</p>
+                    <p className="text-sm text-[#9CA3AF]">Choose a city to search for properties</p>
                   </div>
-                ) : loadingCandidates ? (
+                ) : customLoading ? (
                   <div className="text-center py-8"><Spinner className="w-6 h-6 mx-auto" /></div>
                 ) : scoredCustomCandidates.length === 0 ? (
                   <div className="text-center py-8">
@@ -1086,6 +1079,38 @@ export function PropertyFinder({
                   </div>
                 )}
               </div>
+
+              {/* Full grid for custom results */}
+              {!customLoading && scoredCustomCandidates.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">
+                    {scoredCustomCandidates.length} {scoredCustomCandidates.length === 1 ? 'result' : 'results'}
+                  </p>
+                  <div className="space-y-3">
+                    {scoredCustomCandidates.slice(5).map((r, i) => {
+                      const cardId = r.uprn ?? r.address
+                      return (
+                        <div key={r.uprn ?? `custom-extra-${i}`}
+                          className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#F3F4F6] hover:border-[#A7F3D0] transition-all cursor-pointer bg-white"
+                          onClick={() => openVerifiedAnalysis(r)}>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-[#111827] truncate">{r.address}</p>
+                            <p className="text-[11px] text-[#9CA3AF]">{[r.city, r.postcode].filter(Boolean).join(' · ')}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-xs font-bold text-[#047857]">{r.grossYield != null ? `${r.grossYield.toFixed(1)}%` : '—'}</p>
+                            <p className="text-[10px] text-[#9CA3AF]">{fmtVal(r.estimatedValue)}</p>
+                          </div>
+                          {openingId === cardId && <Spinner className="w-4 h-4 shrink-0" />}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {selectedCustomCities.length > 0 && !customLoading && scoredCustomCandidates.length === 0 && noResultsCustom}
+
               <button type="button"
                 onClick={() => { setSortBy('matchScore'); setFinderTab('ai') }}
                 className="w-full bg-white border border-[#E7E5DD] text-[#374151] text-sm font-medium py-3 rounded-xl hover:bg-[#F6F3EC] transition-colors">
@@ -1093,6 +1118,44 @@ export function PropertyFinder({
               </button>
             </div>
           </div>
+
+          {/* Custom full grid view for larger screens */}
+          {!customLoading && !isLoadingCandidates && scoredCustomCandidates.length > 0 && (
+            <div className="hidden xl:block">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <p className="text-sm font-semibold text-[#374151]">
+                  <span className="text-[#111827]">{scoredCustomCandidates.length}</span> {scoredCustomCandidates.length === 1 ? 'match' : 'matches'}
+                </p>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-[#6B7280]">Sort:</label>
+                  <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)}
+                    className="bg-white border border-[#E7E5DD] text-xs font-medium text-[#374151] rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
+                    <option value="matchScore">Match score</option>
+                    <option value="grossYield">Highest gross yield</option>
+                    <option value="estimatedValue">Lowest value</option>
+                    <option value="epc">EPC rating</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                {sortedResults.map((result, i) => {
+                  const cardId = result.uprn ?? result.address
+                  return (
+                    <ResultCard
+                      key={result.uprn ?? `custom-card-${i}`}
+                      result={result}
+                      isFav={finderFavs.has(cardId)}
+                      benchmarkCities={benchmarkProfile?.cities ?? []}
+                      isOpening={openingId === cardId}
+                      openError={openErrors[cardId] ?? null}
+                      onToggleFav={() => toggleFinderFav(cardId)}
+                      onOpen={() => openVerifiedAnalysis(result)}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
