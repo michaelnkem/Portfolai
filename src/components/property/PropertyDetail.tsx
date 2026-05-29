@@ -58,11 +58,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const [maintenance, setMaintenance] = useState(1.5)
   const [voidWks, setVoidWks] = useState(2)
   const [rentSet, setRentSet] = useState(false)
-  const [otherAnnualIncome, setOtherAnnualIncome] = useState(45000)
-  const [annualMortgageInterest, setAnnualMortgageInterest] = useState(0)
-  const [showSection24, setShowSection24] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [otherAnnualIncome, setOtherAnnualIncome] = useState(0)
+  const [annualMortgageInterest, setAnnualMortgageInterest] = useState(0)
+  const [showSection24, setShowSection24] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -79,7 +79,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     return () => el.removeEventListener('scroll', handler)
   }, [])
 
-  // ── Data extraction (unchanged) ──────────────────────────────────────────────
   const p        = data.property    as Record<string, unknown>
   const enriched = data.enriched    as Record<string, unknown>
   const epc      = data.epc         as Record<string, unknown> | null
@@ -88,7 +87,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const cityName = data.cityName    as string
   const cityData = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
 
-  // ── Calculations ─────────────────────────────────────────────────────────────
   const effectiveRent = rentSet ? rent : (enriched?.estimatedRent as number || 0)
   const price = Number(p?.last_sold_price ?? 0)
   const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
@@ -97,7 +95,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const estimatedCurrentValue = (enriched?.estimatedCurrentValue as number)
     || (price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0)
 
-  // Yield price basis: last sold price first, fall back to estimated current value
   const _soldP = Number(p?.last_sold_price ?? 0)
   const yieldPrice = (_soldP > 0) ? _soldP : (estimatedCurrentValue > 0 ? estimatedCurrentValue : 0)
   const yieldPriceSource: 'last_sold_price' | 'estimated_current_value' | null =
@@ -115,17 +112,15 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
   const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
-  const section24Result: Section24Result | null = (() => {
-    if (!effectiveRent || !yieldPrice) return null
-    const mortInterest = annualMortgageInterest > 0
-      ? annualMortgageInterest
-      : mort
-      ? Math.round(mort.loan * (mortRate / 100))
-      : 0
-    return calcSection24(yieldPrice, effectiveRent, otherAnnualIncome, mortInterest, serviceCharge, groundRent, mgmtFee, maintenance, voidWks)
-  })()
+  const s24: Section24Result | null = showSection24 && effectiveRent > 0
+    ? calcSection24({
+        annualRentalIncome: effectiveRent * 12,
+        otherAnnualIncome,
+        annualMortgageInterest,
+        annualAllowableExpenses: Math.round(effectiveRent * 12 * (mgmtFee / 100)) + Math.round((price || 0) * maintenance / 100) + serviceCharge + groundRent + Math.round(effectiveRent * voidWks / 4.33),
+      })
+    : null
 
-  // ── EPC resolution (epc register first — unchanged) ──────────────────────────
   const epcRaw = String(
     epc?.current_energy_rating ||
     epc?.currentEnergyRating ||
@@ -141,7 +136,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const epcKnown   = epcRating !== '?'
   const epcCompliant = epcKnown && epcRating <= 'C'
 
-  // ── Attribute resolution ─────────────────────────────────────────────────────
   const floorArea =
     (epc?.total_floor_area  ? Number(epc.total_floor_area)  : null) ||
     (epc?.totalFloorArea    ? Number(epc.totalFloorArea)    : null) ||
@@ -150,7 +144,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     (p?.epc_floor_area      ? Number(p.epc_floor_area)      : null) ||
     null
 
-  const bedsLabel    = String(enriched?.attrBedroomsLabel  || (p?.bedrooms  != null ? `${p.bedrooms}`  : ''))
+  const bedsLabel = (() => {
+    const enrichedLabel = String(enriched?.attrBedroomsLabel ?? '')
+    if (enrichedLabel && enrichedLabel !== '0' && enrichedLabel !== 'Unknown') return enrichedLabel
+    const rawBeds = Number(p?.bedrooms)
+    if (rawBeds > 0) return String(rawBeds)
+    return 'Not recorded'
+  })()
   const bathsLabel   = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : ''))
   const tenureLabel  = String(enriched?.attrTenureLabel    || String(p?.tenure ?? '') || '')
   const gardenLabel  = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Rear Garden' : p?.has_garden === false ? 'No' : ''))
@@ -204,9 +204,8 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   return (
     <div className={inline ? 'flex flex-col flex-1 overflow-hidden bg-[#FAF9F5]' : 'fixed inset-0 z-50 flex bg-[#FAF9F5] overflow-hidden'} style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
 
-      {/* ── Sidebar (modal mode only — inline mode uses the main app sidebar) ── */}
+      {/* ── Sidebar (modal mode only) ── */}
       {!inline && <aside className="hidden lg:flex flex-col w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
-        {/* Logo */}
         <div className="px-6 py-5 border-b border-[#E7E5DD]">
           <button onClick={() => onHome ? onHome() : onClose()}
             className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
@@ -219,7 +218,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           </button>
         </div>
 
-        {/* Nav */}
         <nav className="flex-1 px-4 py-4 space-y-0.5">
           {NAV_ITEMS.map(item => (
             <button key={item.label}
@@ -236,7 +234,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           ))}
         </nav>
 
-        {/* Bottom cards */}
         <div className="px-4 pb-4 space-y-3">
           <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-2xl p-4">
             <p className="text-[11px] font-bold text-[#B7791F] mb-1">⭐ Upgrade to Premium</p>
@@ -253,10 +250,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
         </div>
       </aside>}
 
-      {/* ── Main area ───────────────────────────────────────────────────────── */}
+      {/* ── Main area ── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
-        {/* Top header (modal mode only — inline mode uses the main app header) */}
         {!inline && <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E5DD] px-6 lg:px-8 h-[68px] flex items-center justify-between gap-4 z-10">
           <PropertySearchBar
             onSelectProperty={onSearchProperty ?? (() => {})}
@@ -279,7 +275,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           </div>
         </header>}
 
-        {/* ── Sticky scroll summary ──────────────────────────────────────────── */}
+        {/* ── Sticky scroll summary ── */}
         <div className={`shrink-0 overflow-hidden transition-all duration-300 ${scrolled ? 'max-h-[56px] border-b border-[#E7E5DD]' : 'max-h-0'}`}>
           <div className="bg-white/95 backdrop-blur-sm px-6 lg:px-8 h-14 flex items-center justify-between gap-6">
             <p className="text-sm font-semibold text-[#111827] truncate" style={{ fontFamily: SERIF }}>{address.split(',')[0]}</p>
@@ -314,7 +310,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
         <div className="flex-1 overflow-y-auto" ref={scrollRef}>
           <div className="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-            {/* ── Property header ────────────────────────────────────────────── */}
+            {/* ── Property header ── */}
             <div className="mb-6">
               <button onClick={onClose}
                 className="flex items-center gap-1.5 text-sm text-[#6B7280] hover:text-[#047857] transition-colors mb-4 group">
@@ -365,83 +361,78 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </div>
             </div>
 
-            {/* ── KPI strip ──────────────────────────────────────────────────── */}
+            {/* ── KPI strip ── */}
             {isLoading ? (
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
                 {[...Array(5)].map((_, i) => <SkeletonCard key={i} className={i === 0 ? 'col-span-2 lg:col-span-1' : ''} />)}
               </div>
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-4 mb-6">
-                  {/* Est. Current Value */}
-                  <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Estimated Current Value</p>
-                    <p className="font-bold text-[38px] leading-none text-[#047857] mb-2"
-                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                      {estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
-                    </p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {confidenceScore && (
-                        <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
-                          {confidenceScore}% confidence
-                        </span>
-                      )}
-                      {price && p?.last_sold_date && (
-                        <p className="text-xs text-[#6B7280]">Est. from {String(p.last_sold_date).slice(0, 4)} sale price</p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Last Sold */}
-                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Last Sold Price</p>
-                    <p className="font-bold text-[28px] leading-none text-[#111827] mb-2"
-                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                      {price ? `£${price.toLocaleString()}` : '—'}
-                    </p>
-                    {p?.last_sold_date && (
-                      <p className="text-xs text-[#6B7280]">Sold {String(p.last_sold_date).slice(0, 4)}</p>
+                <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Estimated Current Value</p>
+                  <p className="font-bold text-[38px] leading-none text-[#047857] mb-2"
+                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                    {estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
+                  </p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {confidenceScore && (
+                      <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
+                        {confidenceScore}% confidence
+                      </span>
+                    )}
+                    {price && p?.last_sold_date && (
+                      <p className="text-xs text-[#6B7280]">Est. from {String(p.last_sold_date).slice(0, 4)} sale price</p>
                     )}
                   </div>
+                </div>
 
-                  {/* Gross Yield */}
-                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Gross Yield</p>
-                    <p className={`font-bold text-[28px] leading-none mb-2 ${grossYield > 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
-                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                      {grossYield ? `${grossYield}%` : '—'}
-                    </p>
-                    {cityData && <p className="text-xs text-[#6B7280]">Area avg {cityData.avgYield}%</p>}
-                    {yieldPriceSource === 'estimated_current_value' && (
-                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
-                    )}
-                  </div>
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Last Sold Price</p>
+                  <p className="font-bold text-[28px] leading-none text-[#111827] mb-2"
+                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                    {price ? `£${price.toLocaleString()}` : '—'}
+                  </p>
+                  {p?.last_sold_date && (
+                    <p className="text-xs text-[#6B7280]">Sold {String(p.last_sold_date).slice(0, 4)}</p>
+                  )}
+                </div>
 
-                  {/* Net Yield */}
-                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Net Yield</p>
-                    <p className={`font-bold text-[28px] leading-none mb-2 ${netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
-                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                      {netYield ? `${netYield}%` : '—'}
-                    </p>
-                    <p className="text-xs text-[#6B7280]">After all costs</p>
-                    {yieldPriceSource === 'estimated_current_value' && (
-                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
-                    )}
-                  </div>
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Gross Yield</p>
+                  <p className={`font-bold text-[28px] leading-none mb-2 ${grossYield > 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
+                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                    {grossYield ? `${grossYield}%` : '—'}
+                  </p>
+                  {cityData && <p className="text-xs text-[#6B7280]">Area avg {cityData.avgYield}%</p>}
+                  {yieldPriceSource === 'estimated_current_value' && (
+                    <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
+                  )}
+                </div>
 
-                  {/* Total ROI */}
-                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Total ROI</p>
-                    <p className="font-bold text-[28px] leading-none text-[#B7791F] mb-2"
-                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                      {totalROI ? `${totalROI}%` : '—'}
-                    </p>
-                    <p className="text-xs text-[#6B7280]">Net yield + cap growth</p>
-                  </div>
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Net Yield</p>
+                  <p className={`font-bold text-[28px] leading-none mb-2 ${netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
+                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                    {netYield ? `${netYield}%` : '—'}
+                  </p>
+                  <p className="text-xs text-[#6B7280]">After all costs</p>
+                  {yieldPriceSource === 'estimated_current_value' && (
+                    <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
+                  )}
+                </div>
+
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Total ROI</p>
+                  <p className="font-bold text-[28px] leading-none text-[#B7791F] mb-2"
+                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                    {totalROI ? `${totalROI}%` : '—'}
+                  </p>
+                  <p className="text-xs text-[#6B7280]">Net yield + cap growth</p>
+                </div>
               </div>
             )}
 
-            {/* ── Confidence + data quality bar ──────────────────────────────── */}
+            {/* ── Confidence + data quality bar ── */}
             <div className="flex items-center justify-between gap-4 mb-5 px-1 flex-wrap">
               <div className="flex items-center gap-3 flex-wrap">
                 {comparablesCount > 0 && (
@@ -461,7 +452,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </p>
             </div>
 
-            {/* ── Tab bar ────────────────────────────────────────────────────── */}
+            {/* ── Tab bar ── */}
             <div className="flex gap-0 border-b border-[#E7E5DD] mb-6 overflow-x-auto">
               {tabs.map(t => (
                 <button key={t.id} onClick={() => setTab(t.id)}
@@ -481,19 +472,18 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
             {tab === 'overview' && (
               <div className="grid grid-cols-12 gap-5">
 
-                {/* ── Property Details (col 1–4) ──────────────────────────── */}
                 <div className="col-span-12 lg:col-span-4 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Property Details</h3>
                   <div>
                     {[
-                      { icon: '🛏', label: 'Bedrooms',  value: bedsLabel,                          inferred: bedsInferred,   epc: false, verified: false },
-                      { icon: '🛁', label: 'Bathrooms', value: bathsLabel,                         inferred: bathsInferred,  epc: false, verified: false },
-                      { icon: '⊞', label: 'Floor Area', value: floorArea ? `${floorArea} m²` : '', inferred: false,          epc: false, verified: !!(epc?.total_floor_area || enriched?.epcFloorArea) },
-                      { icon: '⚡', label: 'EPC Rating', value: epcKnown ? epcRating : '',          inferred: false,          epc: true,  verified: false },
-                      { icon: '🌿', label: 'Garden',    value: gardenLabel,                         inferred: gardenInferred, epc: false, verified: false },
-                      { icon: '🏠', label: 'Type',      value: propType,                            inferred: false,          epc: false, verified: false },
-                      { icon: '📋', label: 'Tenure',    value: tenureLabel,                         inferred: tenureInferred, epc: false, verified: false },
-                    ].filter(r => r.value).map(row => (
+                      { icon: '🛏', label: 'Bedrooms',   value: bedsLabel,                          inferred: bedsInferred,   epc: false, verified: false },
+                      { icon: '🛁', label: 'Bathrooms',  value: bathsLabel,                         inferred: bathsInferred,  epc: false, verified: false },
+                      { icon: '⊞', label: 'Floor Area',  value: floorArea ? `${floorArea} m²` : '', inferred: false,          epc: false, verified: !!(epc?.total_floor_area || enriched?.epcFloorArea) },
+                      { icon: '⚡', label: 'EPC Rating',  value: epcKnown ? epcRating : '',          inferred: false,          epc: true,  verified: false },
+                      { icon: '🌿', label: 'Garden',     value: gardenLabel,                         inferred: gardenInferred, epc: false, verified: false },
+                      { icon: '🏠', label: 'Type',       value: propType,                            inferred: false,          epc: false, verified: false },
+                      { icon: '📋', label: 'Tenure',     value: tenureLabel,                         inferred: tenureInferred, epc: false, verified: false },
+                    ].filter(r => r.value || r.label === 'Bedrooms').map(row => (
                       <div key={row.label} className="flex items-center justify-between py-3 border-b border-[#F3F4F6] last:border-0">
                         <div className="flex items-center gap-2.5">
                           <span className="text-base w-5 text-center">{row.icon}</span>
@@ -524,7 +514,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 </div>
 
-                {/* ── Investment Signals (col 5–9) ────────────────────────── */}
                 <div className="col-span-12 lg:col-span-5 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Investment Signals</h3>
                   <p className="text-[11px] text-[#9CA3AF] mb-4">Scores are based on 100-point scale. Higher is better.</p>
@@ -577,7 +566,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
-                {/* ── History Preview (col 10–12) ──────────────────────────── */}
                 <div className="col-span-12 lg:col-span-3 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">History Preview</h3>
@@ -620,7 +608,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
-                {/* Data bar */}
                 <div className="col-span-12 bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3 flex gap-6 flex-wrap text-xs text-[#6B7280]">
                   <span>UPRN: <strong className="text-[#374151]">{String(p?.uprn ?? '')}</strong></span>
                   <span>Postcode: <strong className="text-[#374151]">{postcode}</strong></span>
@@ -638,7 +625,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'financials' && (
               <div className="space-y-5">
-                {/* Rent input */}
                 <div className="bg-white border border-[#A7F3D0] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Monthly Rent (£)</h3>
                   <div className="flex gap-3 items-center">
@@ -661,7 +647,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  {/* Cost sliders */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual Costs</h3>
                     <div className="space-y-4">
@@ -685,7 +670,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     </div>
                   </div>
 
-                  {/* P&L */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual P&amp;L</h3>
                     {[
@@ -729,10 +713,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     {[
-                      { label: 'LTV',          value: mort ? `${mort.ltv}%`                     : '—', color: 'text-[#111827]'  },
-                      { label: 'Mortgage',     value: mort ? `£${mort.monthly.toLocaleString()}/mo` : '—', color: 'text-[#DC2626]'  },
-                      { label: 'Net Income',   value: `£${netMonthly.toLocaleString()}/mo`,               color: 'text-[#047857]'  },
-                      { label: 'Cashflow',     value: `£${cashflow.toLocaleString()}/mo`,                 color: cashflow >= 0 ? 'text-[#047857]' : 'text-[#DC2626]' },
+                      { label: 'LTV',        value: mort ? `${mort.ltv}%`                     : '—', color: 'text-[#111827]'  },
+                      { label: 'Mortgage',   value: mort ? `£${mort.monthly.toLocaleString()}/mo` : '—', color: 'text-[#DC2626]'  },
+                      { label: 'Net Income', value: `£${netMonthly.toLocaleString()}/mo`,               color: 'text-[#047857]'  },
+                      { label: 'Cashflow',   value: `£${cashflow.toLocaleString()}/mo`,                 color: cashflow >= 0 ? 'text-[#047857]' : 'text-[#DC2626]' },
                     ].map(kpi => (
                       <div key={kpi.label} className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4">
                         <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1.5">{kpi.label}</p>
@@ -747,131 +731,80 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
-                {/* ── Section 24 Tax Impact ──────────────────────────────────── */}
+                {/* Section 24 Tax Calculator */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
-                  <div className="flex items-start justify-between gap-3 mb-1 flex-wrap">
-                    <div>
-                      <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Section 24 Tax Impact</h3>
-                      <p className="text-xs text-[#9CA3AF] mt-0.5">Mortgage interest relief restricted to 20% basic-rate credit · 2026/27</p>
-                    </div>
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Section 24 Tax Calculator</h3>
+                    <button
+                      onClick={() => setShowSection24(v => !v)}
+                      className={`text-xs font-semibold px-3 py-1.5 rounded-xl border transition-colors ${
+                        showSection24
+                          ? 'bg-[#047857] border-[#047857] text-white'
+                          : 'bg-white border-[#E7E5DD] text-[#374151] hover:bg-[#F6F3EC]'
+                      }`}>
+                      {showSection24 ? 'Hide' : 'Calculate'}
+                    </button>
                   </div>
+                  <p className="text-[11px] text-[#9CA3AF] mb-4">
+                    Estimate your after-tax cash income under Section 24 mortgage interest relief rules (2026/27 thresholds).
+                  </p>
 
-                  {/* Inputs */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 mb-5">
-                    <div>
-                      <label className="block text-xs text-[#6B7280] mb-1.5">Your other annual income (£)</label>
-                      <input
-                        type="number"
-                        value={otherAnnualIncome || ''}
-                        onChange={e => setOtherAnnualIncome(Number(e.target.value))}
-                        placeholder="e.g. 45000"
-                        className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-2.5 text-[#111827] text-sm outline-none focus:border-[#047857] focus:ring-2 focus:ring-[#047857]/10"
-                      />
-                      <p className="text-[10px] text-[#9CA3AF] mt-1">Salary, dividends, other rental income</p>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-[#6B7280] mb-1.5">Annual mortgage interest (£) — optional override</label>
-                      <input
-                        type="number"
-                        value={annualMortgageInterest || ''}
-                        onChange={e => setAnnualMortgageInterest(Number(e.target.value))}
-                        placeholder={mort ? `Auto: £${Math.round(mort.loan * (mortRate / 100)).toLocaleString()}` : 'e.g. 8000'}
-                        className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-2.5 text-[#111827] text-sm outline-none focus:border-[#047857] focus:ring-2 focus:ring-[#047857]/10"
-                      />
-                      <p className="text-[10px] text-[#9CA3AF] mt-1">Leave blank to use mortgage modeller rate</p>
-                    </div>
-                  </div>
-
-                  {!section24Result ? (
-                    <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-5 py-6 text-center">
-                      <p className="text-sm text-[#9CA3AF]">Set a monthly rent above to calculate your Section 24 tax position.</p>
-                    </div>
-                  ) : (
+                  {showSection24 && (
                     <>
-                      {/* Higher-rate warning */}
-                      {section24Result.pushesIntoHigher && (
-                        <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-xl px-4 py-3 mb-4 flex gap-3 items-start">
-                          <span className="text-lg shrink-0">⚠</span>
-                          <div>
-                            <p className="text-xs font-semibold text-[#B7791F]">This property pushes you into the higher-rate tax band</p>
-                            <p className="text-xs text-[#92400E] mt-0.5 leading-relaxed">
-                              Your rental profit takes total income above £{(50270).toLocaleString()}.
-                              Section 24 means you cannot deduct mortgage interest — only a 20% credit applies,
-                              resulting in effective tax above your marginal rate on the interest element.
-                            </p>
-                          </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                        <div>
+                          <label className="text-xs text-[#6B7280] mb-1.5 block">Other annual income (employment/pension) £</label>
+                          <input
+                            type="number"
+                            value={otherAnnualIncome || ''}
+                            onChange={e => setOtherAnnualIncome(Number(e.target.value))}
+                            placeholder="e.g. 35000"
+                            className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-3 text-[#111827] text-sm outline-none focus:border-[#047857] focus:ring-2 focus:ring-[#047857]/10"
+                          />
                         </div>
-                      )}
-
-                      {/* Three KPI cards */}
-                      <div className="grid grid-cols-3 gap-3 mb-3">
-                        <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-4">
-                          <p className="text-[10px] uppercase tracking-[0.08em] text-[#047857] mb-1.5">Taxable Rental Profit</p>
-                          <p className="font-bold text-lg text-[#047857]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
-                            £{netMonthly.toLocaleString()}/mo
-                          </p>
-                          <p className="text-[10px] text-[#6B7280] mt-1">Before mortgage interest relief</p>
-                        </div>
-                        <div className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-xl p-4">
-                          <p className="text-[10px] uppercase tracking-[0.08em] text-[#DC2626] mb-1.5">Tax Paid on Rent</p>
-                          <p className="font-bold text-lg text-[#DC2626]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
-                            £{Math.round(section24Result.totalTaxPaid / 12).toLocaleString()}/mo
-                          </p>
-                          <p className="text-[10px] text-[#6B7280] mt-1">After Section 24 credit</p>
-                          <p className="text-[10px] text-[#9CA3AF] mt-0.5">{section24Result.taxBand} · {section24Result.effectiveRate}% eff.</p>
-                        </div>
-                        <div className={`border rounded-xl p-4 ${section24Result.afterTaxMonthly > 0 ? 'bg-[#ECFDF5] border-[#A7F3D0]' : 'bg-[#FEF2F2] border-[#FCA5A5]'}`}>
-                          <p className={`text-[10px] uppercase tracking-[0.08em] mb-1.5 ${section24Result.afterTaxMonthly > 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`}>After-Tax Cash Income</p>
-                          <p className={`font-bold text-lg ${section24Result.afterTaxMonthly > 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`} style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
-                            £{section24Result.afterTaxMonthly.toLocaleString()}/mo
-                          </p>
-                          <p className="text-[10px] text-[#6B7280] mt-1">After costs, interest &amp; tax</p>
+                        <div>
+                          <label className="text-xs text-[#6B7280] mb-1.5 block">Annual mortgage interest £</label>
+                          <input
+                            type="number"
+                            value={annualMortgageInterest || ''}
+                            onChange={e => setAnnualMortgageInterest(Number(e.target.value))}
+                            placeholder={mort ? `e.g. ${Math.round(mort.monthly * 12 * mortRate / 100 / 12 * 100) / 100}` : 'e.g. 8400'}
+                            className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-3 text-[#111827] text-sm outline-none focus:border-[#047857] focus:ring-2 focus:ring-[#047857]/10"
+                          />
                         </div>
                       </div>
 
-                      {/* Helper note */}
-                      <p className="text-[11px] text-[#9CA3AF] leading-relaxed mb-4">
-                        Taxable rental profit excludes mortgage interest under Section 24. Mortgage interest is instead handled through a 20% tax credit and then deducted when calculating after-tax cash income.
-                      </p>
-
-                      {/* Detailed breakdown toggle */}
-                      <button
-                        onClick={() => setShowSection24(v => !v)}
-                        className="w-full text-xs font-semibold text-[#047857] py-2.5 border border-[#A7F3D0] bg-[#ECFDF5] rounded-xl hover:bg-[#D1FAE5] transition-colors mb-4">
-                        {showSection24 ? 'Hide calculation ↑' : 'Show calculation ↓'}
-                      </button>
-
-                      {/* Detailed breakdown */}
-                      {showSection24 && (() => {
-                        const annualRentDisplay = Math.round(effectiveRent * ((52 - voidWks) / 52) * 12)
-                        const allowableExpDisplay = annualRentDisplay - section24Result.taxableProfit
-                        return (
-                          <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4 mb-4">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF] mb-3">Calculation Breakdown (annual)</p>
-                            {[
-                              { k: 'Gross annual rent after voids',       v: `£${annualRentDisplay.toLocaleString()}`,                             col: 'text-[#047857]' },
-                              { k: 'Less allowable expenses',             v: `-£${allowableExpDisplay.toLocaleString()}`,                          col: 'text-[#DC2626]' },
-                              { k: 'Taxable rental profit',               v: `£${section24Result.taxableProfit.toLocaleString()}`,                 col: 'text-[#111827] font-semibold' },
-                              { k: `Income tax (${section24Result.taxBand})`, v: `-£${section24Result.incomeTaxOnRent.toLocaleString()}`,          col: 'text-[#DC2626]' },
-                              { k: 'Section 24 credit (20% of interest)', v: `+£${section24Result.section24Credit.toLocaleString()}`,              col: 'text-[#047857]' },
-                              { k: 'Net tax paid on rental income',       v: `-£${section24Result.totalTaxPaid.toLocaleString()}`,                 col: 'text-[#DC2626] font-semibold' },
-                            ].map(row => (
-                              <div key={row.k} className="flex justify-between py-2 border-b border-[#F3F4F6] last:border-0 text-sm">
-                                <span className="text-[#475569]">{row.k}</span>
-                                <span className={row.col}>{row.v}</span>
-                              </div>
-                            ))}
+                      {s24 && (
+                        <>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                            <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4">
+                              <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-0.5">Taxable Rental Profit</p>
+                              <p className="text-[10px] text-[#9CA3AF] mb-1.5">Before mortgage interest relief</p>
+                              <p className="font-bold text-lg text-[#111827]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                                £{s24.taxableRentalProfit.toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-xl p-4">
+                              <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-0.5">Tax Paid on Rent</p>
+                              <p className="text-[10px] text-[#9CA3AF] mb-0.5">After Section 24 credit</p>
+                              <p className="text-[10px] text-[#9CA3AF] mb-1.5">{s24.taxBand === 'higher' ? 'Higher rate taxpayer' : s24.taxBand === 'additional' ? 'Additional rate taxpayer' : 'Basic rate taxpayer'}</p>
+                              <p className="font-bold text-lg text-[#DC2626]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                                £{s24.taxOnRent.toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-4">
+                              <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-0.5">After-Tax Cash Income</p>
+                              <p className="text-[10px] text-[#9CA3AF] mb-1.5">After costs, interest &amp; tax</p>
+                              <p className={`font-bold text-lg ${s24.afterTaxCashIncome >= 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`} style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                                £{s24.afterTaxCashIncome.toLocaleString()}
+                              </p>
+                            </div>
                           </div>
-                        )
-                      })()}
-
-                      {/* Disclaimer */}
-                      <p className="text-[10px] text-[#9CA3AF] leading-relaxed">
-                        This is an estimate for illustrative purposes only. It does not constitute tax advice.
-                        Consult a qualified accountant or tax adviser before making investment decisions.
-                        Figures use 2026/27 UK income tax thresholds. Interest shown is year-1 approximate;
-                        actual deductible interest varies by lender and repayment schedule.
-                      </p>
+                          <p className="text-[11px] text-[#9CA3AF]">
+                            Taxable rental profit excludes mortgage interest under Section 24 — only a 20% tax credit applies regardless of your rate. Figures use 2026/27 UK income tax thresholds. Consult a tax adviser for personalised guidance.
+                          </p>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -939,7 +872,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'risks' && (
               <div className="space-y-5">
-                {/* EPC card */}
                 <div className={`bg-white rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] border ${
                   epcKnown && !epcCompliant ? 'border-[#FCA5A5]' : epcKnown ? 'border-[#A7F3D0]' : 'border-[#E7E5DD]'
                 }`}>
@@ -966,7 +898,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 </div>
 
-                {/* Environmental risks */}
                 {risks && risks.length > 0 && (
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Environmental Risks — Homedata</h3>
@@ -989,16 +920,15 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 )}
 
-                {/* Investment risk factors */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Investment Risk Factors</h3>
                   <div className="space-y-3">
                     {[
-                      { risk: 'Rental void risk',     note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
-                      { risk: 'Capital growth risk',  note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
-                      { risk: 'EPC compliance',       note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
-                      { risk: 'Leasehold risk',       note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
-                      { risk: 'Interest rate risk',   note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
+                      { risk: 'Rental void risk',    note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
+                      { risk: 'Capital growth risk', note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
+                      { risk: 'EPC compliance',      note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
+                      { risk: 'Leasehold risk',      note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
+                      { risk: 'Interest rate risk',  note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
                     ].map(r => (
                       <div key={r.risk} className={`flex gap-4 p-4 rounded-xl border ${
                         r.severity === 'high' ? 'bg-[#FEF2F2] border-[#FCA5A5]' :
@@ -1038,7 +968,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
         </div>
       </div>
 
-      {/* Skeleton shimmer styles */}
       <style>{`
         @keyframes shimmer-light {
           0%   { background-position: -200% 0; }
@@ -1074,8 +1003,8 @@ function LightCityMarketPanel({
   const defaultBedKey = bedKey(propertyBeds)
   const [selectedBed, setSelectedBed] = useState(defaultBedKey)
 
-  const cities     = Object.keys(MARKET_DATA.cities)
-  const cityAvg    = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
+  const cities      = Object.keys(MARKET_DATA.cities)
+  const cityAvg     = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
   const bedroomData = (MARKET_DATA.cityByBedroom as Record<string, Record<string, { avgPrice: number; avgRent: number; avgYield: number }>>)[selectedCity]?.[selectedBed]
 
   const compAvgPrice = bedroomData?.avgPrice ?? cityAvg.avgPrice
@@ -1095,12 +1024,12 @@ function LightCityMarketPanel({
   const pct = (v: number) => v ? `${v.toFixed(1)}%` : '—'
 
   const rows = [
-    { label: 'Estimated Value',  sub: estimatedCurrentValue ? '(est.)' : '(last sold)', prop: fmt(displayPrice),          city: fmt(compAvgPrice),  propRaw: 0,                  cityRaw: 0 },
-    { label: 'Gross Yield',      sub: undefined,                                          prop: pct(propertyGrossYield),    city: pct(compAvgYield),  propRaw: propertyGrossYield, cityRaw: compAvgYield },
-    { label: 'Net Yield',        sub: undefined,                                          prop: pct(propertyNetYield),      city: '—',                propRaw: 0,                  cityRaw: 0 },
-    { label: 'Monthly Rent',     sub: undefined,                                          prop: propertyRent ? fmt(propertyRent) : 'Set rent', city: fmt(compAvgRent), propRaw: 0, cityRaw: 0 },
-    { label: '1yr Growth',       sub: undefined,                                          prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, propRaw: 0, cityRaw: 0 },
-    { label: '5yr Growth',       sub: undefined,                                          prop: `+${cityAvg.capitalGrowth5yr}%`, city: `+${cityAvg.capitalGrowth5yr}%`, propRaw: 0, cityRaw: 0 },
+    { label: 'Estimated Value', sub: estimatedCurrentValue ? '(est.)' : '(last sold)', prop: fmt(displayPrice),       city: fmt(compAvgPrice),  propRaw: 0,                  cityRaw: 0 },
+    { label: 'Gross Yield',     sub: undefined,                                          prop: pct(propertyGrossYield), city: pct(compAvgYield),  propRaw: propertyGrossYield, cityRaw: compAvgYield },
+    { label: 'Net Yield',       sub: undefined,                                          prop: pct(propertyNetYield),   city: '—',                propRaw: 0,                  cityRaw: 0 },
+    { label: 'Monthly Rent',    sub: undefined,                                          prop: propertyRent ? fmt(propertyRent) : 'Set rent', city: fmt(compAvgRent), propRaw: 0, cityRaw: 0 },
+    { label: '1yr Growth',      sub: undefined,                                          prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, propRaw: 0, cityRaw: 0 },
+    { label: '5yr Growth',      sub: undefined,                                          prop: `+${cityAvg.capitalGrowth5yr}%`, city: `+${cityAvg.capitalGrowth5yr}%`, propRaw: 0, cityRaw: 0 },
   ]
 
   return (
@@ -1115,7 +1044,6 @@ function LightCityMarketPanel({
         </select>
       </div>
 
-      {/* Local market label */}
       {cityName && (
         <p className="text-[11px] text-[#9CA3AF] mb-4">
           {BEDS.find(b => b.key === selectedBed)?.label} market · {selectedCity}
@@ -1123,7 +1051,6 @@ function LightCityMarketPanel({
         </p>
       )}
 
-      {/* Bedroom pills */}
       <div className="flex gap-1.5 mb-4 flex-wrap items-center">
         {BEDS.map(b => (
           <button key={b.key} onClick={() => setSelectedBed(b.key)}
@@ -1145,7 +1072,6 @@ function LightCityMarketPanel({
         </div>
       )}
 
-      {/* Table */}
       <div className="overflow-hidden rounded-xl border border-[#E7E5DD]">
         <div className="grid grid-cols-3 bg-[#FAF9F5] px-4 py-2.5 border-b border-[#E7E5DD]">
           <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF]">Metric</span>
