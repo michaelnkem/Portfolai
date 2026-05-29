@@ -145,6 +145,18 @@ export default function Home() {
     })
   }, [])
 
+  const addToFavourites = useCallback((property: Record<string, unknown>) => {
+    const uprn = String((property.property as Record<string, unknown>)?.uprn ?? '')
+    if (!uprn) return
+    // Ensure full property object is in portfolio backing store (required for Favourites page rendering)
+    setPortfolio(prev => {
+      if (prev.some(p => (p.property as Record<string, unknown>)?.uprn === uprn)) return prev
+      return [...prev, property]
+    })
+    // Additive only — never remove from favourites via this handler
+    setFavourites(prev => { const next = new Set(prev); next.add(uprn); return next })
+  }, [])
+
   const removeFromPortfolio = useCallback((uprn: string) => {
     setPortfolio(prev => prev.filter(p => (p.property as Record<string, unknown>)?.uprn !== uprn))
     setFavourites(prev => { const n = new Set(prev); n.delete(uprn); return n })
@@ -769,10 +781,12 @@ export default function Home() {
                 onClose={() => setSelectedProperty(null)}
                 onAI={() => openAI(selectedProperty)}
                 onAddPortfolio={() => addToPortfolio(selectedProperty)}
+                onAddFavourite={() => addToFavourites(selectedProperty)}
                 onHome={() => handleTabChange('search')}
                 onMarketIntel={(propertyData) => { setMarketPropertyContext(propertyData); handleTabChange('market') }}
                 onSearchProperty={handleSelectProperty}
                 isSaved={portfolio.some(p => (p.property as Record<string, unknown>)?.uprn === (selectedProperty.property as Record<string, unknown>)?.uprn)}
+                isFavourite={favourites.has(String((selectedProperty.property as Record<string, unknown>)?.uprn ?? ''))}
               />
             ) : (
               <div className="flex flex-col items-center justify-center flex-1 px-4 py-20">
