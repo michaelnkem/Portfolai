@@ -3,8 +3,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { LineChart } from '@/components/ui'
 import { PropertySearchBar } from '@/components/property/PropertySearchBar'
-import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcSection24, MARKET_DATA } from '@/lib/market-data'
-import type { Section24Result } from '@/lib/market-data'
+import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcSection24, calcOwnershipComparison, MARKET_DATA } from '@/lib/market-data'
+import type { Section24Result, ToggleComparison, ExtractionMethod } from '@/lib/market-data'
 
 interface PropertyDetailProps {
   data: Record<string, unknown>
@@ -39,6 +39,7 @@ const NAV_ITEMS = [
   { icon: '◬', label: 'Alerts' },
 ]
 
+/* ── Skeleton shimmer card ─────────────────────────────────────────────────── */
 function SkeletonCard({ className = '' }: { className?: string }) {
   return (
     <div className={`bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] ${className}`}>
@@ -68,6 +69,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const [showSection24, setShowSection24] = useState(false)
   const [bedroomsOverride, setBedroomsOverride] = useState<number | null>(null)
   const [editingBeds, setEditingBeds] = useState(false)
+  const [ownershipType, setOwnershipType] = useState<'personal' | 'company'>('personal')
+  const [extractionMethod, setExtractionMethod] = useState<ExtractionMethod>('dividends')
+  const [spvRatePremium, setSpvRatePremium] = useState(1.0)
+  const [accountancyCost, setAccountancyCost] = useState(1500)
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -84,16 +89,19 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     return () => el.removeEventListener('scroll', handler)
   }, [])
 
-  // ── Data extraction ───────────────────────────────────────────────────────────
-  const p            = data.property    as Record<string, unknown>
-  const enriched     = data.enriched    as Record<string, unknown>
-  const epc          = data.epc         as Record<string, unknown> | null
-  const risks        = data.risks       as Array<Record<string, unknown>> | undefined
+  // ── Data extraction ──────────────────────────────────────────────────────────
+  const p        = data.property    as Record<string, unknown>
+  const enriched = data.enriched    as Record<string, unknown>
+  const epc      = data.epc         as Record<string, unknown> | null
+  const risks    = data.risks       as Array<Record<string, unknown>> | undefined
   const transactions = data.transactions as Array<Record<string, unknown>> | undefined
-  const cityName     = data.cityName    as string
-  const cityData     = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
+  const cityName = data.cityName    as string
+  const cityData = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
 
-  // Reset bedroom override when a different property is opened
+  // propType needed before estimatedCurrentValue recalc
+  const propType = String(p?.property_type ?? '')
+
+  // Property identity key — reset override when property changes
   const propertyIdentityKey = String(
     p?.uprn || p?.id ||
     `${String(p?.full_address || p?.address || '')}-${String(p?.postcode ?? '')}`
@@ -103,134 +111,136 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     setEditingBeds(false)
   }, [propertyIdentityKey])
 
-  // Property type resolved early — needed for floor-area and recalculation
-  const propType = String(p?.property_type ?? '')
-
-  // ── Floor area: strict source priority with verified/inferred tracking ─────────
+  // ── Floor area resolution with source tracking (Part A) ──────────────────────
   const _faFromEpc = (() => {
-    const v = Number(
-      epc?.total_floor_area || epc?.totalFloorArea ||
-      epc?.floor_area       || epc?.floorArea      || 0
-    )
+    const v = Number(epc?.total_floor_area || epc?.totalFloorArea || epc?.floor_area || epc?.floorArea || 0)
     return v > 10 && v < 1000 ? v : null
   })()
-
   const _faFromEnriched = (() => {
     const v = Number(enriched?.epcFloorArea || 0)
     return v > 10 && v < 1000 ? v : null
   })()
-
   const _faFromProperty = (() => {
-    const v = Number(
-      p?.internal_area_sqm || p?.internalAreaSqm ||
-      p?.floor_area        || p?.floorArea       ||
-      p?.size_sqm          || p?.sizeSqm         || 0
-    )
+    const v = Number(p?.internal_area_sqm || p?.internalAreaSqm || p?.floor_area || p?.floorArea || p?.size_sqm || p?.sizeSqm || 0)
     return v > 10 && v < 1000 ? v : null
   })()
-
   const floorArea: number | null = _faFromEpc || _faFromEnriched || _faFromProperty || null
-  const floorAreaVerified        = !!(_faFromEpc || _faFromEnriched)
+  const floorAreaVerified = !!(_faFromEpc || _faFromEnriched)
   const floorAreaSource: string | null = _faFromEpc
     ? (String(epc?.source ?? '') === 'epc_open_data' ? 'EPC' : 'Homedata EPC')
-    : _faFromEnriched ? 'EPC'
-    : _faFromProperty ? 'Homedata'
-    : null
+    : _faFromEnriched ? 'EPC' : _faFromProperty ? 'Homedata' : null
 
-  // ── Calculations ──────────────────────────────────────────────────────────────
-  const effectiveRent = rentSet ? rent : (enriched?.estimatedRent as number || 0)
-  const price         = Number(p?.last_sold_price ?? 0)
-  const soldYear      = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
-  const yearsHeld     = Math.max(0, 2026 - soldYear)
-  const annualGrowth  = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
-  const _fallback     = price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0
-
-  // Original bedroom count — preserves existing logic exactly, used as recalc anchor
+  // originalPropertyBeds — server-side bedroom count before any override
   const originalPropertyBeds = (() => {
     if (enriched?.attrBedrooms != null) return Number(enriched.attrBedrooms)
     if (Number(p?.bedrooms) > 0) return Number(p.bedrooms)
     return 0
   })()
 
-  // Estimated Current Value — recalculates locally when bedroom override is active
+  // ── Calculations ─────────────────────────────────────────────────────────────
+  const effectiveRent = rentSet ? rent : (enriched?.estimatedRent as number || 0)
+  const price = Number(p?.last_sold_price ?? 0)
+  const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
+  const yearsHeld = Math.max(0, 2026 - soldYear)
+  const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
+  const _fallback = price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0
+
+  // Estimated current value — recalculates locally when bedroom override is active (Part C)
   const estimatedCurrentValue = (() => {
-    const serverValue = Number(
-      enriched?.estimatedCurrentValue ||
-      p?.estimated_current_value      ||
-      p?.estimatedCurrentValue        ||
-      0
-    )
+    const serverValue = Number(enriched?.estimatedCurrentValue || p?.estimated_current_value || p?.estimatedCurrentValue || 0)
     const anchor = serverValue > 0 ? serverValue : _fallback
     if (!Number.isFinite(anchor) || anchor <= 0) return _fallback
     if (bedroomsOverride === null) return anchor
-
     const lookupArea = BEDROOM_AREA_LOOKUP[bedroomsOverride]
     if (!lookupArea) return anchor
-
-    const ptl        = propType.toLowerCase()
+    const ptl = propType.toLowerCase()
     const isDetached = ptl.includes('detached') && !ptl.includes('semi')
-    const corrected  = isDetached ? lookupArea * 1.2 : lookupArea
-
-    const originalArea =
-      floorArea && floorArea > 10
-        ? floorArea
-        : originalPropertyBeds && BEDROOM_AREA_LOOKUP[originalPropertyBeds]
-          ? BEDROOM_AREA_LOOKUP[originalPropertyBeds]
-          : corrected
-
+    const corrected = isDetached ? lookupArea * 1.2 : lookupArea
+    const originalArea = floorArea && floorArea > 10
+      ? floorArea
+      : originalPropertyBeds && BEDROOM_AREA_LOOKUP[originalPropertyBeds]
+      ? BEDROOM_AREA_LOOKUP[originalPropertyBeds]
+      : corrected
     if (!Number.isFinite(originalArea) || originalArea <= 0) return anchor
     return Math.round((anchor / originalArea * corrected) / 1000) * 1000
   })()
 
   // Yield price basis: last sold price first, fall back to estimated current value
-  const _soldP          = Number(p?.last_sold_price ?? 0)
-  const yieldPrice      = (_soldP > 0) ? _soldP : (estimatedCurrentValue > 0 ? estimatedCurrentValue : 0)
+  const _soldP = Number(p?.last_sold_price ?? 0)
+  const yieldPrice = (_soldP > 0) ? _soldP : (estimatedCurrentValue > 0 ? estimatedCurrentValue : 0)
   const yieldPriceSource: 'last_sold_price' | 'estimated_current_value' | null =
     _soldP > 0 ? 'last_sold_price' : estimatedCurrentValue > 0 ? 'estimated_current_value' : null
 
-  const grossYield  = yieldPrice && effectiveRent
+  const grossYield = yieldPrice && effectiveRent
     ? parseFloat(((effectiveRent * 12 / yieldPrice) * 100).toFixed(2)) : 0
-  const netYield    = yieldPrice && effectiveRent
+  const netYield = yieldPrice && effectiveRent
     ? parseFloat((calcNetMonthlyIncome(yieldPrice, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) * 12 / yieldPrice * 100).toFixed(2)) : 0
-  const netMonthly  = yieldPrice && effectiveRent
+  const netMonthly = yieldPrice && effectiveRent
     ? calcNetMonthlyIncome(yieldPrice, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) : 0
   const capitalGrowth = cityData?.capitalGrowth1yr || 0
-  const totalROI    = parseFloat((netYield + capitalGrowth).toFixed(1))
-  const sdlt        = price ? calcSDLT(price, true) : 0
-  const mort        = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
-  const cashflow    = mort ? netMonthly - mort.monthly : netMonthly
+  const totalROI = parseFloat((netYield + capitalGrowth).toFixed(1))
+  const sdlt = price ? calcSDLT(price, true) : 0
+  const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
+  const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
   const s24: Section24Result | null = showSection24 && effectiveRent > 0
     ? calcSection24({
-        annualRentalIncome:      effectiveRent * 12,
+        annualRentalIncome: effectiveRent * 12,
         otherAnnualIncome,
         annualMortgageInterest,
-        annualAllowableExpenses: Math.round(effectiveRent * 12 * (mgmtFee / 100))
-          + Math.round((price || 0) * maintenance / 100)
-          + serviceCharge + groundRent
-          + Math.round(effectiveRent * voidWks / 4.33),
+        annualAllowableExpenses: Math.round(effectiveRent * 12 * (mgmtFee / 100)) + Math.round((price || 0) * maintenance / 100) + serviceCharge + groundRent + Math.round(effectiveRent * voidWks / 4.33),
       })
     : null
 
-  // ── EPC resolution (priority: homedata.epc → epc open data → property record) ─
+  const ownershipComparison: ToggleComparison | null = (() => {
+    if (!effectiveRent || !mort) return null
+    const annualMI = annualMortgageInterest > 0
+      ? annualMortgageInterest
+      : Math.round(mort.loan * mortRate / 100)
+    const allowableExpenses =
+      Math.round(effectiveRent * 12 * (mgmtFee / 100)) +
+      Math.round((yieldPrice || 0) * maintenance / 100) +
+      serviceCharge + groundRent +
+      Math.round(effectiveRent * voidWks / 4.33)
+    return calcOwnershipComparison({
+      annualRentalIncome:      effectiveRent * 12,
+      otherAnnualIncome,
+      annualMortgageInterest:  annualMI,
+      annualAllowableExpenses: allowableExpenses,
+      mortgageLoan:            mort.loan,
+      spvRatePremiumPct:       spvRatePremium,
+      accountancyCostAnnual:   accountancyCost,
+      extractionMethod,
+    })
+  })()
+
+  const displayedMonthlyIncome = (() => {
+    if (ownershipComparison && ownershipType === 'company')
+      return ownershipComparison.company.afterExtractionMonthly
+    if (s24 && ownershipType === 'personal')
+      return Math.round(s24.afterTaxCashIncome / 12)
+    return netMonthly
+  })()
+  const displayedCashflow = mort ? displayedMonthlyIncome - mort.monthly : displayedMonthlyIncome
+
+  // ── EPC resolution ───────────────────────────────────────────────────────────
   const epcRaw = String(
-    epc?.current_energy_rating  ||
-    epc?.currentEnergyRating    ||
-    epc?.energy_rating          ||
-    epc?.rating                 ||
-    enriched?.epcRating         ||
+    epc?.current_energy_rating ||
+    epc?.currentEnergyRating ||
+    epc?.rating ||
+    epc?.energy_rating ||
+    enriched?.epcRating ||
     enriched?.current_energy_rating ||
-    p?.current_energy_rating    ||
-    p?.currentEnergyRating      ||
-    p?.epc_rating               ||
-    p?.epcRating                ||
+    p?.current_energy_rating ||
+    p?.epc_rating ||
     ''
   ).trim().toUpperCase()
-  const epcRating   = epcRaw.match(/[A-G]/)?.[0] ?? '?'
-  const epcKnown    = epcRating !== '?'
+  const epcRating  = epcRaw.match(/[A-G]/)?.[0] ?? '?'
+  const epcKnown   = epcRating !== '?'
   const epcCompliant = epcKnown && epcRating <= 'C'
 
-  // ── Attribute resolution ──────────────────────────────────────────────────────
+  // ── Attribute resolution ─────────────────────────────────────────────────────
+  // bedsLabel: override first, then enriched label, then raw bedrooms, then fallback (Part B)
   const bedsLabel = (() => {
     if (bedroomsOverride !== null) return String(bedroomsOverride)
     const enrichedLabel = String(enriched?.attrBedroomsLabel ?? '')
@@ -239,29 +249,30 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     if (rawBeds > 0) return String(rawBeds)
     return 'Not recorded'
   })()
-  const bathsLabel     = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : ''))
-  const tenureLabel    = String(enriched?.attrTenureLabel    || String(p?.tenure ?? '') || '')
-  const gardenLabel    = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Rear Garden' : p?.has_garden === false ? 'No' : ''))
+  const bathsLabel   = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : ''))
+  const tenureLabel  = String(enriched?.attrTenureLabel    || String(p?.tenure ?? '') || '')
+  const gardenLabel  = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Rear Garden' : p?.has_garden === false ? 'No' : ''))
   const bedsInferred   = Boolean(enriched?.attrBedroomsInferred)
   const bathsInferred  = Boolean(enriched?.attrBathroomsInferred)
   const tenureInferred = Boolean(enriched?.attrTenureInferred)
   const gardenInferred = Boolean(enriched?.attrGardenInferred)
   const floorAreaInferred = !floorAreaVerified && floorArea !== null
-  const anyInferred    = (bedroomsOverride === null ? bedsInferred : false)
-    || bathsInferred || tenureInferred || gardenInferred || floorAreaInferred
+  const anyInferred    = (bedroomsOverride === null ? bedsInferred : false) || bathsInferred || tenureInferred || gardenInferred || floorAreaInferred
 
   const address  = String(p?.full_address || p?.address || 'Unknown Address')
   const postcode = String(p?.postcode ?? '')
 
-  // propertyBeds: override takes priority, then original derived value
-  const propertyBeds = bedroomsOverride !== null ? bedroomsOverride : originalPropertyBeds
+  // propertyBeds: uses override when active (Part B)
+  const propertyBeds = bedroomsOverride !== null ? bedroomsOverride
+    : enriched?.attrBedrooms != null ? Number(enriched.attrBedrooms)
+    : Number(p?.bedrooms) > 0 ? Number(p.bedrooms) : 0
 
   const tabs: { id: DetailTab; label: string }[] = [
-    { id: 'overview',   label: 'Overview'          },
-    { id: 'financials', label: 'Financials'        },
-    { id: 'history',    label: 'History'           },
-    { id: 'risks',      label: 'Risks'             },
-    { id: 'market',     label: 'Market Comparison' },
+    { id: 'overview',   label: 'Overview'           },
+    { id: 'financials', label: 'Financials'         },
+    { id: 'history',    label: 'History'            },
+    { id: 'risks',      label: 'Risks'              },
+    { id: 'market',     label: 'Market Comparison'  },
   ]
 
   const epcColor = !epcKnown ? 'text-[#D1D5DB]'
@@ -275,9 +286,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     ? 'bg-[#FFF7E6] text-[#B7791F] border-[#F5D48A]'
     : 'bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5]'
 
-  const confidenceScore   = enriched?.valuationConfidence ? Number(enriched.valuationConfidence) : null
-  const comparablesCount  = transactions?.length ?? 0
-  const dataQuality       = Math.min(97, 60 + (comparablesCount * 5) + (epcKnown ? 10 : 0) + (floorArea ? 7 : 0))
+  const confidenceScore = enriched?.valuationConfidence ? Number(enriched.valuationConfidence) : null
+  const comparablesCount = transactions?.length ?? 0
+  const dataQuality = Math.min(97, 60 + (comparablesCount * 5) + (epcKnown ? 10 : 0) + (floorArea ? 7 : 0))
 
   const localMarketType = (() => {
     const beds = Number(p?.bedrooms ?? 0)
@@ -293,8 +304,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   return (
     <div className={inline ? 'flex flex-col flex-1 overflow-hidden bg-[#FAF9F5]' : 'fixed inset-0 z-50 flex bg-[#FAF9F5] overflow-hidden'} style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
 
-      {/* ── Sidebar (modal mode only) ── */}
+      {/* ── Sidebar (modal mode only — inline mode uses the main app sidebar) ── */}
       {!inline && <aside className="hidden lg:flex flex-col w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
+        {/* Logo */}
         <div className="px-6 py-5 border-b border-[#E7E5DD]">
           <button onClick={() => onHome ? onHome() : onClose()}
             className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
@@ -307,6 +319,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           </button>
         </div>
 
+        {/* Nav */}
         <nav className="flex-1 px-4 py-4 space-y-0.5">
           {NAV_ITEMS.map(item => (
             <button key={item.label}
@@ -323,6 +336,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           ))}
         </nav>
 
+        {/* Bottom cards */}
         <div className="px-4 pb-4 space-y-3">
           <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-2xl p-4">
             <p className="text-[11px] font-bold text-[#B7791F] mb-1">⭐ Upgrade to Premium</p>
@@ -339,9 +353,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
         </div>
       </aside>}
 
-      {/* ── Main area ── */}
+      {/* ── Main area ───────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
+        {/* Top header (modal mode only — inline mode uses the main app header) */}
         {!inline && <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E5DD] px-6 lg:px-8 h-[68px] flex items-center justify-between gap-4 z-10">
           <PropertySearchBar
             onSelectProperty={onSearchProperty ?? (() => {})}
@@ -364,7 +379,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
           </div>
         </header>}
 
-        {/* ── Sticky scroll summary ── */}
+        {/* ── Sticky scroll summary ──────────────────────────────────────────── */}
         <div className={`shrink-0 overflow-hidden transition-all duration-300 ${scrolled ? 'max-h-[56px] border-b border-[#E7E5DD]' : 'max-h-0'}`}>
           <div className="bg-white/95 backdrop-blur-sm px-6 lg:px-8 h-14 flex items-center justify-between gap-6">
             <p className="text-sm font-semibold text-[#111827] truncate" style={{ fontFamily: SERIF }}>{address.split(',')[0]}</p>
@@ -399,7 +414,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
         <div className="flex-1 overflow-y-auto" ref={scrollRef}>
           <div className="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-            {/* ── Property header ── */}
+            {/* ── Property header ────────────────────────────────────────────── */}
             <div className="mb-6">
               <button onClick={onClose}
                 className="flex items-center gap-1.5 text-sm text-[#6B7280] hover:text-[#047857] transition-colors mb-4 group">
@@ -450,80 +465,85 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </div>
             </div>
 
-            {/* ── KPI strip ── */}
+            {/* ── KPI strip ──────────────────────────────────────────────────── */}
             {isLoading ? (
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
                 {[...Array(5)].map((_, i) => <SkeletonCard key={i} className={i === 0 ? 'col-span-2 lg:col-span-1' : ''} />)}
               </div>
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-4 mb-6">
-                <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Estimated Current Value</p>
-                  <p className="font-bold text-[38px] leading-none text-[#047857] mb-2"
-                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                    {estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
-                  </p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {confidenceScore && bedroomsOverride === null && (
-                      <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
-                        {confidenceScore}% confidence
-                      </span>
-                    )}
-                    {bedroomsOverride !== null ? (
-                      <p className="text-xs text-[#047857] font-medium">Recalculated using corrected bedroom count</p>
-                    ) : price && p?.last_sold_date ? (
-                      <p className="text-xs text-[#6B7280]">Est. from {String(p.last_sold_date).slice(0, 4)} sale price</p>
-                    ) : null}
+                  {/* Est. Current Value */}
+                  <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Estimated Current Value</p>
+                    <p className="font-bold text-[38px] leading-none text-[#047857] mb-2"
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
+                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {confidenceScore && (
+                        <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
+                          {confidenceScore}% confidence
+                        </span>
+                      )}
+                      {bedroomsOverride !== null ? (
+                        <p className="text-xs text-[#047857] font-medium">Recalculated using corrected bedroom count</p>
+                      ) : price && p?.last_sold_date ? (
+                        <p className="text-xs text-[#6B7280]">Est. from {String(p.last_sold_date).slice(0, 4)} sale price</p>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
 
-                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Last Sold Price</p>
-                  <p className="font-bold text-[28px] leading-none text-[#111827] mb-2"
-                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                    {price ? `£${price.toLocaleString()}` : '—'}
-                  </p>
-                  {p?.last_sold_date && (
-                    <p className="text-xs text-[#6B7280]">Sold {String(p.last_sold_date).slice(0, 4)}</p>
-                  )}
-                </div>
+                  {/* Last Sold */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Last Sold Price</p>
+                    <p className="font-bold text-[28px] leading-none text-[#111827] mb-2"
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {price ? `£${price.toLocaleString()}` : '—'}
+                    </p>
+                    {p?.last_sold_date && (
+                      <p className="text-xs text-[#6B7280]">Sold {String(p.last_sold_date).slice(0, 4)}</p>
+                    )}
+                  </div>
 
-                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Gross Yield</p>
-                  <p className={`font-bold text-[28px] leading-none mb-2 ${grossYield > 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
-                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                    {grossYield ? `${grossYield}%` : '—'}
-                  </p>
-                  {cityData && <p className="text-xs text-[#6B7280]">Area avg {cityData.avgYield}%</p>}
-                  {yieldPriceSource === 'estimated_current_value' && (
-                    <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
-                  )}
-                </div>
+                  {/* Gross Yield */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Gross Yield</p>
+                    <p className={`font-bold text-[28px] leading-none mb-2 ${grossYield > 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {grossYield ? `${grossYield}%` : '—'}
+                    </p>
+                    {cityData && <p className="text-xs text-[#6B7280]">Area avg {cityData.avgYield}%</p>}
+                    {yieldPriceSource === 'estimated_current_value' && (
+                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
+                    )}
+                  </div>
 
-                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Net Yield</p>
-                  <p className={`font-bold text-[28px] leading-none mb-2 ${netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
-                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                    {netYield ? `${netYield}%` : '—'}
-                  </p>
-                  <p className="text-xs text-[#6B7280]">After all costs</p>
-                  {yieldPriceSource === 'estimated_current_value' && (
-                    <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
-                  )}
-                </div>
+                  {/* Net Yield */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Net Yield</p>
+                    <p className={`font-bold text-[28px] leading-none mb-2 ${netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {netYield ? `${netYield}%` : '—'}
+                    </p>
+                    <p className="text-xs text-[#6B7280]">After all costs</p>
+                    {yieldPriceSource === 'estimated_current_value' && (
+                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
+                    )}
+                  </div>
 
-                <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Total ROI</p>
-                  <p className="font-bold text-[28px] leading-none text-[#B7791F] mb-2"
-                    style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                    {totalROI ? `${totalROI}%` : '—'}
-                  </p>
-                  <p className="text-xs text-[#6B7280]">Net yield + cap growth</p>
-                </div>
+                  {/* Total ROI */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Total ROI</p>
+                    <p className="font-bold text-[28px] leading-none text-[#B7791F] mb-2"
+                      style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                      {totalROI ? `${totalROI}%` : '—'}
+                    </p>
+                    <p className="text-xs text-[#6B7280]">Net yield + cap growth</p>
+                  </div>
               </div>
             )}
 
-            {/* ── Confidence + data quality bar ── */}
+            {/* ── Confidence + data quality bar ──────────────────────────────── */}
             <div className="flex items-center justify-between gap-4 mb-5 px-1 flex-wrap">
               <div className="flex items-center gap-3 flex-wrap">
                 {comparablesCount > 0 && (
@@ -543,7 +563,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               </p>
             </div>
 
-            {/* ── Tab bar ── */}
+            {/* ── Tab bar ────────────────────────────────────────────────────── */}
             <div className="flex gap-0 border-b border-[#E7E5DD] mb-6 overflow-x-auto">
               {tabs.map(t => (
                 <button key={t.id} onClick={() => setTab(t.id)}
@@ -563,21 +583,21 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
             {tab === 'overview' && (
               <div className="grid grid-cols-12 gap-5">
 
-                {/* ── Property Details ── */}
+                {/* ── Property Details (col 1–4) ──────────────────────────── */}
                 <div className="col-span-12 lg:col-span-4 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Property Details</h3>
                   <div>
-                    {([
-                      { icon: '🛏', label: 'Bedrooms',  value: bedsLabel,                          inferred: bedroomsOverride === null ? bedsInferred : false,   epc: false, verified: false,           verifiedSource: undefined },
-                      { icon: '🛁', label: 'Bathrooms', value: bathsLabel,                         inferred: bathsInferred,  epc: false, verified: false,           verifiedSource: undefined },
-                      { icon: '⊞', label: 'Floor Area', value: floorArea ? `${floorArea} m²` : '', inferred: floorAreaInferred, epc: false, verified: floorAreaVerified, verifiedSource: floorAreaSource ?? undefined },
-                      { icon: '⚡', label: 'EPC Rating', value: epcKnown ? epcRating : '',          inferred: false,          epc: true,  verified: false,           verifiedSource: undefined },
-                      { icon: '🌿', label: 'Garden',    value: gardenLabel,                         inferred: gardenInferred, epc: false, verified: false,           verifiedSource: undefined },
-                      { icon: '🏠', label: 'Type',      value: propType,                            inferred: false,          epc: false, verified: false,           verifiedSource: undefined },
-                      { icon: '📋', label: 'Tenure',    value: tenureLabel,                         inferred: tenureInferred, epc: false, verified: false,           verifiedSource: undefined },
-                    ] as Array<{ icon: string; label: string; value: string; inferred: boolean; epc: boolean; verified: boolean; verifiedSource?: string }>)
-                      .filter(r => r.value || r.label === 'Bedrooms')
-                      .map(row => (
+                    {(
+                      [
+                        { icon: '🛏', label: 'Bedrooms',   value: bedsLabel,                          inferred: bedroomsOverride === null ? bedsInferred : false, epc: false, verified: false,           verifiedSource: undefined },
+                        { icon: '🛁', label: 'Bathrooms',  value: bathsLabel,                         inferred: bathsInferred,                                   epc: false, verified: false,           verifiedSource: undefined },
+                        { icon: '⊞', label: 'Floor Area',  value: floorArea ? `${floorArea} m²` : '', inferred: floorAreaInferred,                               epc: false, verified: floorAreaVerified, verifiedSource: floorAreaSource ?? undefined },
+                        { icon: '⚡', label: 'EPC Rating',  value: epcKnown ? epcRating : '',          inferred: false,                                           epc: true,  verified: false,           verifiedSource: undefined },
+                        { icon: '🌿', label: 'Garden',     value: gardenLabel,                        inferred: gardenInferred,                                  epc: false, verified: false,           verifiedSource: undefined },
+                        { icon: '🏠', label: 'Type',       value: propType,                           inferred: false,                                           epc: false, verified: false,           verifiedSource: undefined },
+                        { icon: '📋', label: 'Tenure',     value: tenureLabel,                        inferred: tenureInferred,                                  epc: false, verified: false,           verifiedSource: undefined },
+                      ] as Array<{ icon: string; label: string; value: string; inferred: boolean; epc: boolean; verified: boolean; verifiedSource?: string }>
+                    ).filter(r => r.value || r.label === 'Bedrooms').map(row => (
                       <div key={row.label} className="flex items-center justify-between py-3 border-b border-[#F3F4F6] last:border-0">
                         <div className="flex items-center gap-2.5">
                           <span className="text-base w-5 text-center">{row.icon}</span>
@@ -588,16 +608,22 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                             editingBeds ? (
                               <div className="flex items-center gap-1 flex-wrap justify-end">
                                 {[1, 2, 3, 4, 5, 6].map(n => (
-                                  <button key={n} type="button"
-                                    aria-label={`Set bedroom count to ${n}`}
+                                  <button
+                                    key={n}
+                                    type="button"
                                     onClick={() => { setBedroomsOverride(n); setEditingBeds(false) }}
-                                    className="w-7 h-7 flex items-center justify-center text-xs font-semibold rounded-lg border border-[#E7E5DD] bg-white text-[#111827] hover:bg-[#ECFDF5] hover:border-[#A7F3D0] hover:text-[#047857] transition-colors">
+                                    className={`text-xs font-semibold w-7 h-7 rounded-lg border transition-colors ${
+                                      bedroomsOverride === n
+                                        ? 'bg-[#047857] border-[#047857] text-white'
+                                        : 'bg-white border-[#E7E5DD] text-[#374151] hover:border-[#047857] hover:text-[#047857]'
+                                    }`}>
                                     {n}
                                   </button>
                                 ))}
-                                <button type="button" aria-label="Cancel bedroom correction"
+                                <button
+                                  type="button"
                                   onClick={() => setEditingBeds(false)}
-                                  className="text-[11px] text-[#6B7280] ml-1 px-1 hover:text-[#111827] transition-colors">
+                                  className="text-xs text-[#9CA3AF] hover:text-[#374151] px-1 transition-colors">
                                   Cancel
                                 </button>
                               </div>
@@ -606,7 +632,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                                 <span className={`text-sm font-semibold ${bedroomsOverride !== null ? 'text-[#047857]' : bedsInferred ? 'text-[#B7791F]' : 'text-[#111827]'}`}>
                                   {bedsLabel}{bedroomsOverride !== null ? ' ✓' : bedsInferred ? ' *' : ''}
                                 </span>
-                                <button type="button" aria-label="Correct bedroom count"
+                                <button
+                                  type="button"
+                                  aria-label="Correct bedroom count"
                                   onClick={() => setEditingBeds(true)}
                                   className="text-xs font-semibold px-2 py-0.5 rounded-lg bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857] hover:bg-[#D1FAE5] transition-colors">
                                   {bedroomsOverride !== null ? 'Edit' : 'Correct?'}
@@ -632,17 +660,14 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     ))}
                   </div>
                   {anyInferred && (
-                    <p className="text-[11px] text-[#9CA3AF] mt-3">
-                      * Estimated from floor area and local property norms.
-                      {floorAreaInferred ? ' Floor area from Homedata property record.' : ''}
-                    </p>
+                    <p className="text-[11px] text-[#9CA3AF] mt-3">* Estimated from floor area and local property norms.</p>
                   )}
                   <div className="mt-4 pt-4 border-t border-[#F3F4F6]">
                     <p className="text-[11px] text-[#9CA3AF]">Sources: Land Registry · EPC Open Data · Homedata · UK HPI</p>
                   </div>
                 </div>
 
-                {/* ── Investment Signals ── */}
+                {/* ── Investment Signals (col 5–9) ────────────────────────── */}
                 <div className="col-span-12 lg:col-span-5 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Investment Signals</h3>
                   <p className="text-[11px] text-[#9CA3AF] mb-4">Scores are based on 100-point scale. Higher is better.</p>
@@ -695,7 +720,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
-                {/* ── History Preview ── */}
+                {/* ── History Preview (col 10–12) ──────────────────────────── */}
                 <div className="col-span-12 lg:col-span-3 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">History Preview</h3>
@@ -756,6 +781,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'financials' && (
               <div className="space-y-5">
+                {/* Rent input */}
                 <div className="bg-white border border-[#A7F3D0] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Monthly Rent (£)</h3>
                   <div className="flex gap-3 items-center">
@@ -778,6 +804,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Cost sliders */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual Costs</h3>
                     <div className="space-y-4">
@@ -801,6 +828,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     </div>
                   </div>
 
+                  {/* P&L */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual P&amp;L</h3>
                     {[
@@ -816,12 +844,50 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                         <span className={`font-semibold ${row.col}`}>{row.v}</span>
                       </div>
                     ))}
-                    <div className="flex justify-between pt-4 items-baseline">
+                    <div className="flex justify-between pt-4 items-baseline border-b border-[#F3F4F6] pb-2.5">
                       <span className="text-sm font-bold text-[#111827]">Net Income</span>
                       <span className="font-bold text-[#B7791F] text-2xl" style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
                         £{(netMonthly * 12).toLocaleString()}
                       </span>
                     </div>
+                    {ownershipComparison && ownershipType === 'company' && (
+                      <>
+                        <div className="flex justify-between py-2 text-sm">
+                          <span className="text-[#475569]">Corp tax ({(ownershipComparison.company.corpTaxRate * 100).toFixed(0)}%)</span>
+                          <span className="font-semibold text-[#DC2626]">-£{ownershipComparison.company.corpTax.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between py-2 text-sm border-b border-[#F3F4F6]">
+                          <span className="text-[#475569]">SPV premium + accountancy</span>
+                          <span className="font-semibold text-[#DC2626]">-£{(ownershipComparison.company.mortgagePremiumAnnual + ownershipComparison.company.accountancyCostAnnual).toLocaleString()}</span>
+                        </div>
+                        {ownershipComparison.company.dividendTax > 0 && (
+                          <div className="flex justify-between py-2 text-sm border-b border-[#F3F4F6]">
+                            <span className="text-[#475569]">{extractionMethod === 'salary' ? 'Income tax + NIC' : 'Dividend tax'}</span>
+                            <span className="font-semibold text-[#DC2626]">-£{ownershipComparison.company.dividendTax.toLocaleString()}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between pt-3 items-baseline">
+                          <span className="text-sm font-bold text-[#111827]">After-tax ({extractionMethod})</span>
+                          <span className={`font-bold text-2xl ${ownershipComparison.company.afterExtractionAnnual >= 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`} style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                            £{ownershipComparison.company.afterExtractionAnnual.toLocaleString()}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                    {ownershipType === 'personal' && s24 && (
+                      <>
+                        <div className="flex justify-between py-2 text-sm border-b border-[#F3F4F6]">
+                          <span className="text-[#475569]">Tax on rent (S24)</span>
+                          <span className="font-semibold text-[#DC2626]">-£{s24.taxOnRent.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between pt-3 items-baseline">
+                          <span className="text-sm font-bold text-[#111827]">After-tax income</span>
+                          <span className={`font-bold text-2xl ${s24.afterTaxCashIncome >= 0 ? 'text-[#047857]' : 'text-[#DC2626]'}`} style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
+                            £{s24.afterTaxCashIncome.toLocaleString()}
+                          </span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -844,10 +910,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     {[
-                      { label: 'LTV',        value: mort ? `${mort.ltv}%`                         : '—', color: 'text-[#111827]'  },
-                      { label: 'Mortgage',   value: mort ? `£${mort.monthly.toLocaleString()}/mo` : '—', color: 'text-[#DC2626]'  },
-                      { label: 'Net Income', value: `£${netMonthly.toLocaleString()}/mo`,                color: 'text-[#047857]'  },
-                      { label: 'Cashflow',   value: `£${cashflow.toLocaleString()}/mo`,                  color: cashflow >= 0 ? 'text-[#047857]' : 'text-[#DC2626]' },
+                      { label: 'LTV',          value: mort ? `${mort.ltv}%`                     : '—', color: 'text-[#111827]'  },
+                      { label: 'Mortgage',     value: mort ? `£${mort.monthly.toLocaleString()}/mo` : '—', color: 'text-[#DC2626]'  },
+                      { label: 'Net Income',   value: `£${displayedMonthlyIncome.toLocaleString()}/mo`,    color: 'text-[#047857]'  },
+                      { label: 'Cashflow',     value: `£${displayedCashflow.toLocaleString()}/mo`,        color: displayedCashflow >= 0 ? 'text-[#047857]' : 'text-[#DC2626]' },
                     ].map(kpi => (
                       <div key={kpi.label} className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4">
                         <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1.5">{kpi.label}</p>
@@ -862,7 +928,113 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
+                {/* Ownership Structure Toggle */}
+                {ownershipComparison && (
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Ownership Structure</h3>
+                      <div className="flex rounded-xl border border-[#E7E5DD] overflow-hidden">
+                        {(['personal', 'company'] as const).map(type => (
+                          <button key={type} onClick={() => setOwnershipType(type)}
+                            className={`px-4 py-2 text-xs font-semibold transition-colors ${
+                              ownershipType === type
+                                ? 'bg-[#047857] text-white'
+                                : 'bg-white text-[#374151] hover:bg-[#F6F3EC]'
+                            }`}>
+                            {type === 'personal' ? 'Personal' : 'Ltd Company'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Comparison tiles */}
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div className={`rounded-xl p-4 border transition-colors ${ownershipType === 'personal' ? 'border-[#047857] bg-[#ECFDF5]' : 'border-[#E7E5DD] bg-[#FAF9F5]'}`}>
+                        <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Personal</p>
+                        <p className="font-bold text-lg text-[#111827]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                          £{ownershipComparison.personal.afterTaxMonthly.toLocaleString()}/mo
+                        </p>
+                        <p className="text-[10px] text-[#9CA3AF] mt-0.5">After S24 tax</p>
+                      </div>
+                      <div className={`rounded-xl p-4 border transition-colors ${ownershipType === 'company' ? 'border-[#047857] bg-[#ECFDF5]' : 'border-[#E7E5DD] bg-[#FAF9F5]'}`}>
+                        <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Ltd Company</p>
+                        <p className="font-bold text-lg text-[#111827]" style={{ fontFamily: SERIF, letterSpacing: '-0.02em' }}>
+                          £{ownershipComparison.company.afterExtractionMonthly.toLocaleString()}/mo
+                        </p>
+                        <p className="text-[10px] text-[#9CA3AF] mt-0.5">After corp &amp; extraction tax</p>
+                      </div>
+                    </div>
+
+                    {/* Verdict */}
+                    <div className={`rounded-xl px-4 py-3 border mb-4 ${
+                      ownershipComparison.verdict === 'company' ? 'bg-[#ECFDF5] border-[#A7F3D0]'
+                      : ownershipComparison.verdict === 'personal' ? 'bg-[#FFF7E6] border-[#F5D48A]'
+                      : 'bg-[#F6F3EC] border-[#E7E5DD]'
+                    }`}>
+                      <p className="text-xs font-medium text-[#374151]">
+                        {ownershipComparison.verdict === 'company' ? '🏢' : ownershipComparison.verdict === 'personal' ? '👤' : '⚖️'}{' '}
+                        {ownershipComparison.verdictReason}
+                      </p>
+                    </div>
+
+                    {/* Company settings (only when company mode) */}
+                    {ownershipType === 'company' && (
+                      <div className="space-y-3 pt-3 border-t border-[#F3F4F6]">
+                        <div>
+                          <div className="flex justify-between text-xs mb-1.5">
+                            <span className="text-[#6B7280]">SPV rate premium</span>
+                            <span className="text-[#111827] font-semibold">{spvRatePremium.toFixed(2)}%</span>
+                          </div>
+                          <input type="range" min={0.25} max={2.0} step={0.25} value={spvRatePremium}
+                            onChange={e => setSpvRatePremium(Number(e.target.value))}
+                            className="w-full h-1.5 accent-[#047857]" />
+                        </div>
+                        <div>
+                          <div className="flex justify-between text-xs mb-1.5">
+                            <span className="text-[#6B7280]">Accountancy cost/yr</span>
+                            <span className="text-[#111827] font-semibold">£{accountancyCost.toLocaleString()}</span>
+                          </div>
+                          <input type="range" min={500} max={5000} step={250} value={accountancyCost}
+                            onChange={e => setAccountancyCost(Number(e.target.value))}
+                            className="w-full h-1.5 accent-[#047857]" />
+                        </div>
+                        <div>
+                          <span className="text-xs text-[#6B7280] mb-1.5 block">Extraction method</span>
+                          <div className="flex rounded-xl border border-[#E7E5DD] overflow-hidden">
+                            {([['dividends', 'Dividends'], ['salary', 'Salary'], ['retain', 'Retain']] as const).map(([val, label]) => (
+                              <button key={val} onClick={() => setExtractionMethod(val)}
+                                className={`flex-1 py-2 text-xs font-medium transition-colors ${
+                                  extractionMethod === val
+                                    ? 'bg-[#047857] text-white'
+                                    : 'bg-white text-[#374151] hover:bg-[#F6F3EC]'
+                                }`}>
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 pt-1">
+                          {[
+                            { k: 'Corp tax',    v: `£${ownershipComparison.company.corpTax.toLocaleString()}` },
+                            { k: 'SPV premium', v: `£${ownershipComparison.company.mortgagePremiumAnnual.toLocaleString()}/yr` },
+                            { k: 'Accountancy', v: `£${ownershipComparison.company.accountancyCostAnnual.toLocaleString()}/yr` },
+                          ].map(item => (
+                            <div key={item.k} className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-3">
+                              <p className="text-[9px] uppercase tracking-[0.06em] text-[#9CA3AF] mb-1">{item.k}</p>
+                              <p className="font-semibold text-sm text-[#DC2626]" style={{ fontFamily: SERIF }}>{item.v}</p>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-[#9CA3AF] pt-1">
+                          Figures assume full profit extracted. Consult an accountant — these are indicative estimates only.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Section 24 Tax Calculator */}
+                {ownershipType === 'personal' && (
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-1">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Section 24 Tax Calculator</h3>
@@ -939,6 +1111,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     </>
                   )}
                 </div>
+                )}
               </div>
             )}
 
@@ -1003,6 +1176,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'risks' && (
               <div className="space-y-5">
+                {/* EPC card */}
                 <div className={`bg-white rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] border ${
                   epcKnown && !epcCompliant ? 'border-[#FCA5A5]' : epcKnown ? 'border-[#A7F3D0]' : 'border-[#E7E5DD]'
                 }`}>
@@ -1029,12 +1203,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 </div>
 
+                {/* Environmental risks */}
                 {risks && risks.length > 0 && (
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Environmental Risks — Homedata</h3>
                     {risks.map((r, i) => {
-                      const score    = Number(r.score ?? 0)
-                      const label    = String(r.label ?? '')
+                      const score = Number(r.score ?? 0)
+                      const label = String(r.label ?? '')
                       const riskType = String(r.risk_type ?? '').replace(/_/g, ' ')
                       const badgeCls = score <= 1
                         ? 'bg-[#ECFDF5] text-[#047857]'
@@ -1051,15 +1226,16 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                 )}
 
+                {/* Investment risk factors */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Investment Risk Factors</h3>
                   <div className="space-y-3">
                     {[
-                      { risk: 'Rental void risk',    note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
-                      { risk: 'Capital growth risk', note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
-                      { risk: 'EPC compliance',      note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
-                      { risk: 'Leasehold risk',      note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
-                      { risk: 'Interest rate risk',  note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
+                      { risk: 'Rental void risk',     note: `${voidWks} weeks/yr = £${Math.round(effectiveRent * voidWks / 4.33).toLocaleString()} lost income`, severity: voidWks > 4 ? 'high' : 'med' },
+                      { risk: 'Capital growth risk',  note: `${cityName} 1yr: ${capitalGrowth > 0 ? '+' : ''}${capitalGrowth}% vs national avg +${MARKET_DATA.macro.hpiGrowthForecast}%`, severity: capitalGrowth < 2 ? 'high' : 'low' },
+                      { risk: 'EPC compliance',       note: !epcKnown ? 'EPC not assessed — verify with EPC register' : epcCompliant ? 'Compliant — no action needed' : `Rating ${epcRating} — works needed before 2028`, severity: !epcKnown ? 'med' : epcCompliant ? 'low' : 'high' },
+                      { risk: 'Leasehold risk',       note: p?.tenure === 'Leasehold' ? 'Leasehold — check years remaining and extension cost' : 'Freehold — no leasehold risk', severity: p?.tenure === 'Leasehold' ? 'med' : 'low' },
+                      { risk: 'Interest rate risk',   note: `At ${mortRate}% BTL rate — stress test at +2% (${(mortRate + 2).toFixed(1)}%)`, severity: 'med' },
                     ].map(r => (
                       <div key={r.risk} className={`flex gap-4 p-4 rounded-xl border ${
                         r.severity === 'high' ? 'bg-[#FEF2F2] border-[#FCA5A5]' :
@@ -1099,6 +1275,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
         </div>
       </div>
 
+      {/* Skeleton shimmer styles */}
       <style>{`
         @keyframes shimmer-light {
           0%   { background-position: -200% 0; }
@@ -1130,12 +1307,12 @@ function LightCityMarketPanel({
   fullWidth?: boolean
 }) {
   const [selectedCity, setSelectedCity] = useState(cityName)
-  const bedKey        = (n: number) => n === 0 ? 'studio' : `${n}bed`
+  const bedKey = (n: number) => n === 0 ? 'studio' : `${n}bed`
   const defaultBedKey = bedKey(propertyBeds)
   const [selectedBed, setSelectedBed] = useState(defaultBedKey)
 
-  const cities      = Object.keys(MARKET_DATA.cities)
-  const cityAvg     = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
+  const cities     = Object.keys(MARKET_DATA.cities)
+  const cityAvg    = MARKET_DATA.cities[selectedCity as keyof typeof MARKET_DATA.cities] || cityData
   const bedroomData = (MARKET_DATA.cityByBedroom as Record<string, Record<string, { avgPrice: number; avgRent: number; avgYield: number }>>)[selectedCity]?.[selectedBed]
 
   const compAvgPrice = bedroomData?.avgPrice ?? cityAvg.avgPrice
@@ -1155,12 +1332,12 @@ function LightCityMarketPanel({
   const pct = (v: number) => v ? `${v.toFixed(1)}%` : '—'
 
   const rows = [
-    { label: 'Estimated Value', sub: estimatedCurrentValue ? '(est.)' : '(last sold)', prop: fmt(displayPrice),       city: fmt(compAvgPrice),  propRaw: 0,                  cityRaw: 0 },
-    { label: 'Gross Yield',     sub: undefined,                                          prop: pct(propertyGrossYield), city: pct(compAvgYield),  propRaw: propertyGrossYield, cityRaw: compAvgYield },
-    { label: 'Net Yield',       sub: undefined,                                          prop: pct(propertyNetYield),   city: '—',                propRaw: 0,                  cityRaw: 0 },
-    { label: 'Monthly Rent',    sub: undefined,                                          prop: propertyRent ? fmt(propertyRent) : 'Set rent', city: fmt(compAvgRent), propRaw: 0, cityRaw: 0 },
-    { label: '1yr Growth',      sub: undefined,                                          prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, propRaw: 0, cityRaw: 0 },
-    { label: '5yr Growth',      sub: undefined,                                          prop: `+${cityAvg.capitalGrowth5yr}%`, city: `+${cityAvg.capitalGrowth5yr}%`, propRaw: 0, cityRaw: 0 },
+    { label: 'Estimated Value',  sub: estimatedCurrentValue ? '(est.)' : '(last sold)', prop: fmt(displayPrice),          city: fmt(compAvgPrice),  propRaw: 0,                  cityRaw: 0 },
+    { label: 'Gross Yield',      sub: undefined,                                          prop: pct(propertyGrossYield),    city: pct(compAvgYield),  propRaw: propertyGrossYield, cityRaw: compAvgYield },
+    { label: 'Net Yield',        sub: undefined,                                          prop: pct(propertyNetYield),      city: '—',                propRaw: 0,                  cityRaw: 0 },
+    { label: 'Monthly Rent',     sub: undefined,                                          prop: propertyRent ? fmt(propertyRent) : 'Set rent', city: fmt(compAvgRent), propRaw: 0, cityRaw: 0 },
+    { label: '1yr Growth',       sub: undefined,                                          prop: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, city: `${cityAvg.capitalGrowth1yr > 0 ? '+' : ''}${cityAvg.capitalGrowth1yr}%`, propRaw: 0, cityRaw: 0 },
+    { label: '5yr Growth',       sub: undefined,                                          prop: `+${cityAvg.capitalGrowth5yr}%`, city: `+${cityAvg.capitalGrowth5yr}%`, propRaw: 0, cityRaw: 0 },
   ]
 
   return (
@@ -1175,6 +1352,7 @@ function LightCityMarketPanel({
         </select>
       </div>
 
+      {/* Local market label */}
       {cityName && (
         <p className="text-[11px] text-[#9CA3AF] mb-4">
           {BEDS.find(b => b.key === selectedBed)?.label} market · {selectedCity}
@@ -1182,6 +1360,7 @@ function LightCityMarketPanel({
         </p>
       )}
 
+      {/* Bedroom pills */}
       <div className="flex gap-1.5 mb-4 flex-wrap items-center">
         {BEDS.map(b => (
           <button key={b.key} onClick={() => setSelectedBed(b.key)}
@@ -1203,6 +1382,7 @@ function LightCityMarketPanel({
         </div>
       )}
 
+      {/* Table */}
       <div className="overflow-hidden rounded-xl border border-[#E7E5DD]">
         <div className="grid grid-cols-3 bg-[#FAF9F5] px-4 py-2.5 border-b border-[#E7E5DD]">
           <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF]">Metric</span>
