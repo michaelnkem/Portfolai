@@ -498,3 +498,177 @@ export function calcOwnershipComparison({
 
   return { personal, company, monthlyDiff, annualDiff, verdict, verdictReason, isBasicRate }
 }
+
+// ── Investment Signals Calculator ─────────────────────────────────────────────
+// Maps UK postcode area prefix → nearest city in MARKET_DATA
+const POSTCODE_CITY: Record<string, string> = {
+  // London inner
+  'E':  'London', 'EC': 'London', 'N':  'London', 'NW': 'London',
+  'SE': 'London', 'SW': 'London', 'W':  'London', 'WC': 'London',
+  // London outer
+  'BR': 'London', 'CR': 'London', 'DA': 'London', 'EN': 'London',
+  'HA': 'London', 'IG': 'London', 'KT': 'London', 'RM': 'London',
+  'SM': 'London', 'TN': 'London', 'TW': 'London', 'UB': 'London',
+  'WD': 'London',
+  // Manchester / Greater Manchester
+  'M':  'Manchester', 'SK': 'Manchester', 'OL': 'Manchester',
+  'BL': 'Manchester', 'WN': 'Manchester', 'WA': 'Manchester',
+  // Liverpool / Merseyside
+  'L':  'Liverpool', 'CH': 'Liverpool', 'PR': 'Liverpool',
+  // Leeds / West Yorkshire
+  'LS': 'Leeds', 'BD': 'Leeds', 'HX': 'Leeds', 'HG': 'Leeds', 'WF': 'Leeds',
+  // Sheffield / South Yorkshire
+  'S':  'Sheffield', 'DN': 'Sheffield',
+  // Birmingham / West Midlands
+  'B':  'Birmingham', 'CV': 'Birmingham', 'WS': 'Birmingham',
+  'WV': 'Birmingham', 'DY': 'Birmingham',
+  // Nottingham / East Midlands
+  'NG': 'Nottingham', 'DE': 'Nottingham', 'LE': 'Nottingham',
+  // Bristol / South West
+  'BS': 'Bristol', 'BA': 'Bristol', 'GL': 'Bristol', 'SN': 'Bristol',
+}
+
+// Per postcode-area score adjustments relative to city baseline (d=demand s=supplyGap r=regen i=infra)
+const OUTCODE_ADJ: Record<string, { d: number; s: number; r: number; i: number; area: string }> = {
+  // Inner London — above city avg
+  'EC': { d:  9, s: 12, r:  4, i:  9, area: 'East Central London'  },
+  'WC': { d:  8, s: 11, r:  3, i:  8, area: 'West Central London'  },
+  'W':  { d:  5, s:  4, r:  2, i:  6, area: 'West London'          },
+  'SW': { d:  4, s:  3, r:  2, i:  4, area: 'South West London'    },
+  'NW': { d:  3, s:  5, r:  5, i:  3, area: 'North West London'    },
+  'N':  { d:  2, s:  4, r:  4, i:  2, area: 'North London'         },
+  'E':  { d:  5, s:  8, r: 13, i:  3, area: 'East London'          },
+  'SE': { d:  1, s:  3, r:  7, i:  1, area: 'South East London'    },
+  // Outer London — below city avg
+  'EN': { d:  -8, s:  -6, r:  -4, i:  -7, area: 'Enfield'          },
+  'IG': { d: -10, s:  -8, r:  -6, i:  -9, area: 'Ilford/Redbridge' },
+  'RM': { d: -12, s:  -7, r:  -5, i: -10, area: 'Romford'          },
+  'DA': { d: -11, s:  -6, r:   3, i:  -8, area: 'Bexley/Dartford'  },
+  'CR': { d:  -9, s:  -5, r:  -3, i:  -6, area: 'Croydon'          },
+  'BR': { d: -10, s:  -4, r:  -4, i:  -7, area: 'Bromley'          },
+  'TW': { d:  -7, s:  -3, r:  -2, i:  -5, area: 'Twickenham'       },
+  'KT': { d:  -6, s:  -2, r:  -2, i:  -4, area: 'Kingston'         },
+  'HA': { d:  -9, s:  -6, r:  -3, i:  -6, area: 'Harrow'           },
+  'UB': { d:  -8, s:  -5, r:   2, i:  -5, area: 'Hillingdon'       },
+  'WD': { d: -11, s:  -7, r:  -5, i:  -8, area: 'Watford'          },
+  'SM': { d:  -8, s:  -4, r:  -3, i:  -6, area: 'Sutton/Merton'    },
+  // Greater Manchester periphery
+  'SK': { d:  -5, s:  -3, r:  -4, i:  -5, area: 'Stockport'        },
+  'OL': { d:  -8, s:  -4, r:  -5, i:  -7, area: 'Oldham'           },
+  'BL': { d:  -9, s:  -5, r:  -6, i:  -8, area: 'Bolton'           },
+  'WN': { d: -10, s:  -6, r:  -7, i:  -9, area: 'Wigan'            },
+  'WA': { d:  -7, s:  -4, r:  -5, i:  -6, area: 'Warrington'       },
+  // West Yorkshire periphery
+  'BD': { d:  -6, s:  -3, r:  -4, i:  -6, area: 'Bradford'         },
+  'HX': { d:  -8, s:  -5, r:  -6, i:  -8, area: 'Halifax'          },
+  'HG': { d:  -5, s:  -4, r:  -5, i:  -6, area: 'Harrogate'        },
+  'WF': { d:  -6, s:  -4, r:  -5, i:  -7, area: 'Wakefield'        },
+  // South Yorkshire periphery
+  'DN': { d:  -5, s:  -3, r:  -4, i:  -5, area: 'Doncaster'        },
+  // West Midlands periphery
+  'CV': { d:  -5, s:  -3, r:  -4, i:  -5, area: 'Coventry'         },
+  'WS': { d:  -6, s:  -4, r:  -5, i:  -6, area: 'Walsall'          },
+  'WV': { d:  -7, s:  -5, r:  -6, i:  -7, area: 'Wolverhampton'    },
+  'DY': { d:  -6, s:  -4, r:  -4, i:  -6, area: 'Dudley'           },
+  // East Midlands periphery
+  'DE': { d:  -4, s:  -2, r:  -3, i:  -4, area: 'Derby'            },
+  'LE': { d:  -3, s:  -2, r:  -2, i:  -3, area: 'Leicester'        },
+  // South West periphery
+  'BA': { d:  -5, s:  -3, r:  -4, i:  -5, area: 'Bath'             },
+  'GL': { d:  -7, s:  -5, r:  -6, i:  -7, area: 'Gloucester'       },
+  'SN': { d:  -8, s:  -6, r:  -7, i:  -8, area: 'Swindon'          },
+}
+
+function _postcodeArea(postcode: string): string {
+  const outcode = postcode.trim().toUpperCase().split(/\s+/)[0] ?? ''
+  return outcode.replace(/\d.*$/, '') // strip from first digit onward
+}
+
+function _clamp(v: number): number {
+  return Math.max(0, Math.min(100, Math.round(v)))
+}
+
+function _signalLabel(score: number): string {
+  if (score >= 90) return 'Very Strong'
+  if (score >= 75) return 'Strong'
+  if (score >= 60) return 'Good'
+  if (score >= 45) return 'Moderate'
+  return 'Weak'
+}
+
+export interface InvestmentSignalInput {
+  postcode: string
+  cityName: string
+}
+
+export interface SignalScore {
+  score: number
+  label: string
+  source: string
+  confidence: number
+}
+
+export interface InvestmentSignals {
+  demand:         SignalScore
+  supplyGap:      SignalScore
+  regeneration:   SignalScore
+  infrastructure: SignalScore
+  sourceLevel:    'outcode' | 'city' | 'national'
+  areaDescription: string
+}
+
+export function calculateInvestmentSignals({ postcode, cityName }: InvestmentSignalInput): InvestmentSignals {
+  const prefix   = _postcodeArea(postcode)
+  const outAdj   = OUTCODE_ADJ[prefix]
+  const mappedCity = POSTCODE_CITY[prefix] || cityName
+  const baseCity = MARKET_DATA.cities[mappedCity as keyof typeof MARKET_DATA.cities]
+    || MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities]
+
+  const hasOutcodeAdj = !!outAdj && !!prefix
+  const sourceLevel   = hasOutcodeAdj ? 'outcode' : (baseCity ? 'city' : 'national')
+  const confidence    = hasOutcodeAdj ? 85 : baseCity ? 70 : 50
+
+  // Base scores from city data (supply gap = inverted supply score)
+  const baseDemand   = baseCity?.demandScore         ?? 75
+  const baseSupplyGap = baseCity ? (100 - baseCity.supplyScore) : 62
+  const baseRegen    = baseCity?.regenerationScore   ?? 65
+  const baseInfra    = baseCity?.infrastructureScore ?? 70
+
+  const demandScore   = _clamp(baseDemand    + (outAdj?.d ?? 0))
+  const supplyScore   = _clamp(baseSupplyGap + (outAdj?.s ?? 0))
+  const regenScore    = _clamp(baseRegen     + (outAdj?.r ?? 0))
+  const infraScore    = _clamp(baseInfra     + (outAdj?.i ?? 0))
+
+  const areaName = outAdj?.area ?? mappedCity ?? cityName
+  const outcode  = postcode.trim().toUpperCase().split(/\s+/)[0] ?? ''
+  const sourceDesc = hasOutcodeAdj
+    ? `Local area data · ${areaName}`
+    : `City-level data · ${mappedCity || cityName}`
+
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('[investment-signals]', {
+      postcode, prefix, outcode, mappedCity, sourceLevel, areaName,
+      demandScore, supplyGapScore: supplyScore, regenScore, infraScore,
+    })
+  }
+
+  const make = (score: number): SignalScore => ({
+    score,
+    label: _signalLabel(score),
+    source: sourceDesc,
+    confidence,
+  })
+
+  const areaDescription = hasOutcodeAdj
+    ? `${outcode}${areaName !== outcode ? `, ${areaName}` : ''}${cityName ? `, ${cityName}` : ''}`
+    : (cityName || 'UK Average')
+
+  return {
+    demand:         make(demandScore),
+    supplyGap:      make(supplyScore),
+    regeneration:   make(regenScore),
+    infrastructure: make(infraScore),
+    sourceLevel,
+    areaDescription,
+  }
+}
