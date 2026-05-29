@@ -11,10 +11,12 @@ interface PropertyDetailProps {
   onClose: () => void
   onAI: () => void
   onAddPortfolio: () => void
+  onAddFavourite?: () => void
   onHome?: () => void
   onMarketIntel?: (data: Record<string, unknown>) => void
   onSearchProperty?: (data: Record<string, unknown>) => void
   isSaved?: boolean
+  isFavourite?: boolean
   inline?: boolean
 }
 
@@ -50,7 +52,79 @@ function SkeletonCard({ className = '' }: { className?: string }) {
   )
 }
 
-export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, onMarketIntel, onSearchProperty, isSaved = false, inline = false }: PropertyDetailProps) {
+// ── Add To dropdown ──────────────────────────────────────────────────────────
+
+function AddToDropdown({
+  uprn, isInPortfolio, isFavourite, onPortfolio, onFavourite, size = 'md',
+}: {
+  uprn: string
+  isInPortfolio: boolean
+  isFavourite: boolean
+  onPortfolio: () => void
+  onFavourite: () => void
+  size?: 'sm' | 'md'
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onMouse = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onMouse)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onMouse); document.removeEventListener('keydown', onKey) }
+  }, [open])
+
+  const btnCls = size === 'sm'
+    ? 'flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-xl border border-[#F5D48A] bg-[#FFF7E6] text-[#B7791F] hover:bg-[#FEF3C7] transition-colors'
+    : 'flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-xl border border-[#E7E5DD] bg-white text-[#374151] hover:bg-[#F6F3EC] transition-colors'
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Add property to favourites or portfolio"
+        onClick={() => setOpen(v => !v)}
+        className={btnCls}>
+        + Add to <span className="opacity-60 text-[10px]">▾</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1.5 z-50 bg-white border border-[#E7E5DD] rounded-xl shadow-[0_8px_32px_rgba(17,24,39,0.12)] overflow-hidden min-w-[190px]">
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!uprn}
+            title={!uprn ? 'Cannot favourite — no verified UPRN' : undefined}
+            onClick={() => { if (uprn) { onFavourite(); setOpen(false) } }}
+            className={`w-full flex items-center gap-3 px-4 py-3 text-sm text-[#111827] hover:bg-[#F6F3EC] transition-colors text-left ${!uprn ? 'opacity-40 cursor-not-allowed' : ''}`}>
+            <span className="text-base">★</span>
+            <span className="flex-1">Favourite</span>
+            {isFavourite && <span className="text-[#047857] font-bold text-xs">✓</span>}
+          </button>
+          <div className="border-t border-[#F3F4F6]" />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { onPortfolio(); setOpen(false) }}
+            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-[#111827] hover:bg-[#F6F3EC] transition-colors text-left">
+            <span className="text-base">📂</span>
+            <span className="flex-1">Portfolio</span>
+            {isInPortfolio && <span className="text-[#047857] font-bold text-xs">✓</span>}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavourite, onHome, onMarketIntel, onSearchProperty, isSaved = false, isFavourite = false, inline = false }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
   const [rent, setRent] = useState<number>(0)
   const [deposit, setDeposit] = useState(0)
@@ -93,6 +167,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const p        = data.property    as Record<string, unknown>
   const enriched = data.enriched    as Record<string, unknown>
   const epc      = data.epc         as Record<string, unknown> | null
+  const uprn     = String(p?.uprn ?? '')
   const risks    = data.risks       as Array<Record<string, unknown>> | undefined
   const transactions = data.transactions as Array<Record<string, unknown>> | undefined
   const cityName = data.cityName    as string
@@ -449,10 +524,16 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               className="hidden sm:flex items-center gap-1.5 bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857] text-xs font-semibold px-3 py-2 rounded-xl hover:bg-[#D1FAE5] transition-colors">
               🤖 AI Analysis
             </button>
-            <button onClick={isSaved ? undefined : onAddPortfolio}
-              className={`hidden sm:flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl transition-colors ${isSaved ? 'bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] cursor-default' : 'bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] hover:bg-[#FEF3C7]'}`}>
-              {isSaved ? '★ Saved' : '★ Save'}
-            </button>
+            <div className="hidden sm:block">
+              <AddToDropdown
+                uprn={uprn}
+                isInPortfolio={isSaved}
+                isFavourite={isFavourite}
+                onPortfolio={onAddPortfolio}
+                onFavourite={() => onAddFavourite?.()}
+                size="sm"
+              />
+            </div>
             <button onClick={onClose}
               className="w-9 h-9 flex items-center justify-center rounded-xl border border-[#E7E5DD] bg-white text-[#6B7280] hover:bg-[#F6F3EC] transition-colors text-sm font-medium">
               ✕
@@ -483,10 +564,14 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   <span className="text-sm font-bold text-[#B7791F]" style={{ fontFamily: SERIF }}>{ownershipFinancials.totalROI}%</span>
                 </div>
               )}
-              <button onClick={isSaved ? undefined : onAddPortfolio}
-                className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${isSaved ? 'bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] cursor-default' : 'bg-[#047857] text-white hover:bg-[#065F46]'}`}>
-                {isSaved ? '★ Saved' : '+ Portfolio'}
-              </button>
+              <AddToDropdown
+                uprn={uprn}
+                isInPortfolio={isSaved}
+                isFavourite={isFavourite}
+                onPortfolio={onAddPortfolio}
+                onFavourite={() => onAddFavourite?.()}
+                size="sm"
+              />
             </div>
           </div>
         </div>
@@ -535,10 +620,14 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   <button className="border border-[#E7E5DD] bg-white text-[#374151] text-sm font-medium px-4 py-2 rounded-xl hover:bg-[#F6F3EC] transition-colors">
                     ↗ Share
                   </button>
-                  <button onClick={isSaved ? undefined : onAddPortfolio}
-                    className={`text-sm font-medium px-4 py-2 rounded-xl transition-colors ${isSaved ? 'bg-[#FFF7E6] border border-[#F5D48A] text-[#B7791F] cursor-default' : 'border border-[#E7E5DD] bg-white text-[#374151] hover:bg-[#F6F3EC]'}`}>
-                    {isSaved ? '★ Saved' : '☆ Save'}
-                  </button>
+                  <AddToDropdown
+                    uprn={uprn}
+                    isInPortfolio={isSaved}
+                    isFavourite={isFavourite}
+                    onPortfolio={onAddPortfolio}
+                    onFavourite={() => onAddFavourite?.()}
+                    size="md"
+                  />
                   <button className="bg-[#047857] text-white text-sm font-medium px-4 py-2 rounded-xl hover:bg-[#065F46] transition-colors">
                     ↓ Export
                   </button>
