@@ -181,7 +181,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const totalROI = parseFloat((netYield + capitalGrowth).toFixed(1))
   const sdlt = price ? calcSDLT(price, true) : 0
   const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
-  const cashflow = mort ? netMonthly - mort.monthly : netMonthly
 
   const s24: Section24Result | null = showSection24 && effectiveRent > 0
     ? calcSection24({
@@ -193,25 +192,29 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     : null
 
   const ownershipComparison: ToggleComparison | null = (() => {
-    if (!effectiveRent || !mort) return null
-    const annualMI = annualMortgageInterest > 0
-      ? annualMortgageInterest
-      : Math.round(mort.loan * mortRate / 100)
-    const allowableExpenses =
-      Math.round(effectiveRent * 12 * (mgmtFee / 100)) +
-      Math.round((yieldPrice || 0) * maintenance / 100) +
-      serviceCharge + groundRent +
-      Math.round(effectiveRent * voidWks / 4.33)
-    return calcOwnershipComparison({
-      annualRentalIncome:      effectiveRent * 12,
-      otherAnnualIncome,
-      annualMortgageInterest:  annualMI,
-      annualAllowableExpenses: allowableExpenses,
-      mortgageLoan:            mort.loan,
-      spvRatePremiumPct:       spvRatePremium,
-      accountancyCostAnnual:   accountancyCost,
-      extractionMethod,
-    })
+    try {
+      if (!effectiveRent || !mort) return null
+      const annualMI = annualMortgageInterest > 0
+        ? annualMortgageInterest
+        : Math.round(mort.loan * mortRate / 100)
+      const allowableExpenses =
+        Math.round(effectiveRent * 12 * (mgmtFee / 100)) +
+        Math.round((yieldPrice || 0) * maintenance / 100) +
+        serviceCharge + groundRent +
+        Math.round(effectiveRent * voidWks / 4.33)
+      return calcOwnershipComparison({
+        annualRentalIncome:      effectiveRent * 12,
+        otherAnnualIncome,
+        annualMortgageInterest:  annualMI,
+        annualAllowableExpenses: allowableExpenses,
+        mortgageLoan:            mort.loan,
+        spvRatePremiumPct:       spvRatePremium,
+        accountancyCostAnnual:   accountancyCost,
+        extractionMethod,
+      })
+    } catch {
+      return null
+    }
   })()
 
   const displayedMonthlyIncome = (() => {
