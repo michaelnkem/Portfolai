@@ -3,8 +3,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { LineChart } from '@/components/ui'
 import { PropertySearchBar } from '@/components/property/PropertySearchBar'
-import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcSection24, calcOwnershipComparison, MARKET_DATA } from '@/lib/market-data'
-import type { Section24Result, ToggleComparison, ExtractionMethod } from '@/lib/market-data'
+import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcSection24, calcOwnershipComparison, calculateInvestmentSignals, MARKET_DATA } from '@/lib/market-data'
+import type { Section24Result, ToggleComparison, ExtractionMethod, InvestmentSignals } from '@/lib/market-data'
 
 interface PropertyDetailProps {
   data: Record<string, unknown>
@@ -226,6 +226,40 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   })()
   const displayedCashflow = mort ? displayedMonthlyIncome - mort.monthly : displayedMonthlyIncome
 
+  // ── Ownership-aware KPI financials ───────────────────────────────────────────
+  // Net Yield and Total ROI reflect the active ownership tax treatment when
+  // ownershipComparison is available (requires rent + mortgage to be set).
+  const ownershipFinancials = (() => {
+    if (!ownershipComparison) {
+      return {
+        netYield,
+        totalROI,
+        netYieldSubLabel: 'After all costs',
+        totalROISubLabel: 'Net yield + cap growth',
+      }
+    }
+    if (ownershipType === 'personal') {
+      // Swap net income to personal after-S24-tax monthly (annualised)
+      const annualIncome = ownershipComparison.personal.afterTaxMonthly * 12
+      const ownerNetYield = yieldPrice > 0 ? parseFloat((annualIncome / yieldPrice * 100).toFixed(2)) : 0
+      return {
+        netYield: ownerNetYield,
+        totalROI: parseFloat((ownerNetYield + capitalGrowth).toFixed(1)),
+        netYieldSubLabel: 'After Section 24 tax',
+        totalROISubLabel: 'Section 24 + cap growth',
+      }
+    }
+    // company: swap net income to after-extraction monthly (annualised)
+    const annualIncome = ownershipComparison.company.afterExtractionMonthly * 12
+    const ownerNetYield = yieldPrice > 0 ? parseFloat((annualIncome / yieldPrice * 100).toFixed(2)) : 0
+    return {
+      netYield: ownerNetYield,
+      totalROI: parseFloat((ownerNetYield + capitalGrowth).toFixed(1)),
+      netYieldSubLabel: 'After company tax',
+      totalROISubLabel: 'Company tax + cap growth',
+    }
+  })()
+
   // ── EPC resolution ───────────────────────────────────────────────────────────
   const epcRaw = String(
     epc?.current_energy_rating ||
@@ -264,6 +298,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
 
   const address  = String(p?.full_address || p?.address || 'Unknown Address')
   const postcode = String(p?.postcode ?? '')
+
+  // ── Investment Signals (computed once per property — requires postcode) ───────
+  const investmentSignals: InvestmentSignals = calculateInvestmentSignals({ postcode, cityName })
 
   // propertyBeds: uses override when active (Part B)
   const propertyBeds = bedroomsOverride !== null ? bedroomsOverride
@@ -393,16 +430,16 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   <span className="text-sm font-bold text-[#047857]" style={{ fontFamily: SERIF }}>£{(estimatedCurrentValue / 1000).toFixed(0)}k</span>
                 </div>
               )}
-              {netYield > 0 && (
+              {ownershipFinancials.netYield > 0 && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF]">Net Yield</span>
-                  <span className="text-sm font-bold text-[#047857]" style={{ fontFamily: SERIF }}>{netYield}%</span>
+                  <span className="text-sm font-bold text-[#047857]" style={{ fontFamily: SERIF }}>{ownershipFinancials.netYield}%</span>
                 </div>
               )}
-              {totalROI > 0 && (
+              {ownershipFinancials.totalROI > 0 && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF]">Total ROI</span>
-                  <span className="text-sm font-bold text-[#B7791F]" style={{ fontFamily: SERIF }}>{totalROI}%</span>
+                  <span className="text-sm font-bold text-[#B7791F]" style={{ fontFamily: SERIF }}>{ownershipFinancials.totalROI}%</span>
                 </div>
               )}
               <button onClick={isSaved ? undefined : onAddPortfolio}
@@ -524,11 +561,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   {/* Net Yield */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Net Yield</p>
-                    <p className={`font-bold text-[28px] leading-none mb-2 ${netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
+                    <p className={`font-bold text-[28px] leading-none mb-2 ${ownershipFinancials.netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
                       style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                      {netYield ? `${netYield}%` : '—'}
+                      {ownershipFinancials.netYield ? `${ownershipFinancials.netYield}%` : '—'}
                     </p>
-                    <p className="text-xs text-[#6B7280]">After all costs</p>
+                    <p className="text-xs text-[#6B7280]">{ownershipFinancials.netYieldSubLabel}</p>
                     {yieldPriceSource === 'estimated_current_value' && (
                       <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
                     )}
@@ -539,9 +576,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Total ROI</p>
                     <p className="font-bold text-[28px] leading-none text-[#B7791F] mb-2"
                       style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                      {totalROI ? `${totalROI}%` : '—'}
+                      {ownershipFinancials.totalROI ? `${ownershipFinancials.totalROI}%` : '—'}
                     </p>
-                    <p className="text-xs text-[#6B7280]">Net yield + cap growth</p>
+                    <p className="text-xs text-[#6B7280]">{ownershipFinancials.totalROISubLabel}</p>
                   </div>
               </div>
             )}
@@ -564,6 +601,40 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
               <p className="text-[11px] text-[#9CA3AF]">
                 Sources: Land Registry · EPC Open Data · Homedata · UK HPI
               </p>
+            </div>
+
+            {/* ── Global ownership toggle ────────────────────────────────────── */}
+            <div className="flex items-center justify-between mb-4 px-1 flex-wrap gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Ownership Mode</span>
+                <span className="text-[11px] text-[#9CA3AF]">· affects tax-aware metrics on all tabs</span>
+              </div>
+              <div className="flex bg-[#F3F4F6] rounded-xl p-0.5 gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => setOwnershipType('personal')}
+                  aria-pressed={ownershipType === 'personal'}
+                  aria-label="Use personal ownership"
+                  className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition-all ${
+                    ownershipType === 'personal'
+                      ? 'bg-[#047857] text-white shadow-sm'
+                      : 'text-[#6B7280] hover:text-[#111827]'
+                  }`}>
+                  Personal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOwnershipType('company')}
+                  aria-pressed={ownershipType === 'company'}
+                  aria-label="Use limited company ownership"
+                  className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition-all ${
+                    ownershipType === 'company'
+                      ? 'bg-[#047857] text-white shadow-sm'
+                      : 'text-[#6B7280] hover:text-[#111827]'
+                  }`}>
+                  Ltd Company
+                </button>
+              </div>
             </div>
 
             {/* ── Tab bar ────────────────────────────────────────────────────── */}
@@ -673,88 +744,52 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                 {/* ── Investment Signals (col 5–9) ────────────────────────── */}
                 <div className="col-span-12 lg:col-span-5 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Investment Signals</h3>
-                  <p className="text-[11px] text-[#9CA3AF] mb-4">Scores are based on 100-point scale. Higher is better.</p>
-                  {cityData ? (
-                    <>
-                      <div className="flex justify-around py-4">
-                        {[
-                          { score: cityData.demandScore,          label: 'Demand'         },
-                          { score: 100 - cityData.supplyScore,    label: 'Supply Gap'     },
-                          { score: cityData.regenerationScore,    label: 'Regeneration'   },
-                          { score: cityData.infrastructureScore,  label: 'Infrastructure' },
-                        ].map(ring => {
-                          const color = ring.score >= 75 ? '#047857' : ring.score >= 50 ? '#B7791F' : '#D1D5DB'
-                          const wordLabel = ring.score >= 80 ? 'Very Strong' : ring.score >= 65 ? 'Strong' : ring.score >= 50 ? 'Good' : 'Moderate'
-                          const wordColor = ring.score >= 75 ? 'text-[#047857]' : ring.score >= 50 ? 'text-[#B7791F]' : 'text-[#9CA3AF]'
-                          const circ = 2 * Math.PI * 28
-                          return (
-                            <div key={ring.label} className="flex flex-col items-center gap-2">
-                              <svg width="72" height="72" viewBox="0 0 72 72">
-                                <circle cx="36" cy="36" r="28" fill="none" stroke="#F3F4F6" strokeWidth="8"/>
-                                <circle cx="36" cy="36" r="28" fill="none"
-                                  stroke={color} strokeWidth="8" strokeLinecap="round"
-                                  strokeDasharray={`${(ring.score / 100) * circ} ${circ}`}
-                                  transform="rotate(-90 36 36)"
-                                  style={{ transition: 'stroke-dasharray 0.6s ease' }}
-                                />
-                                <text x="36" y="41" textAnchor="middle" fontSize="15" fontWeight="700" fill="#111827">
-                                  {ring.score}
-                                </text>
-                              </svg>
-                              <div className="text-center">
-                                <p className="text-[11px] font-semibold text-[#374151]">{ring.label}</p>
-                                <p className={`text-[10px] font-medium ${wordColor}`}>{wordLabel}</p>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                      <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-3 mt-2">
-                        <p className="text-xs text-[#047857] leading-relaxed">
-                          {cityData.demandScore >= 75 ? 'Strong demand' : 'Moderate demand'} and infrastructure support long-term rental resilience in {cityName}.
-                          {cityData.capitalGrowth5yr > 15 ? ` ${cityData.capitalGrowth5yr}% capital growth over 5 years.` : ''}
-                        </p>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="py-10 text-center">
-                      <p className="text-sm text-[#9CA3AF]">City investment data unavailable for this area.</p>
-                    </div>
-                  )}
+                  <p className="text-[11px] text-[#9CA3AF] mb-4">100-point scale · scores reflect local area conditions</p>
+                  <div className="flex justify-around py-4">
+                    {([
+                      { sig: investmentSignals.demand,         label: 'Demand'         },
+                      { sig: investmentSignals.supplyGap,      label: 'Supply Gap'     },
+                      { sig: investmentSignals.regeneration,   label: 'Regeneration'   },
+                      { sig: investmentSignals.infrastructure, label: 'Infrastructure' },
+                    ] as Array<{ sig: import('@/lib/market-data').SignalScore; label: string }>).map(({ sig, label }) => {
+                      const color = sig.score >= 75 ? '#047857' : sig.score >= 50 ? '#B7791F' : '#D1D5DB'
+                      const wordColor = sig.score >= 75 ? 'text-[#047857]' : sig.score >= 50 ? 'text-[#B7791F]' : 'text-[#9CA3AF]'
+                      const circ = 2 * Math.PI * 28
+                      return (
+                        <div key={label} className="flex flex-col items-center gap-2">
+                          <svg width="72" height="72" viewBox="0 0 72 72">
+                            <circle cx="36" cy="36" r="28" fill="none" stroke="#F3F4F6" strokeWidth="8"/>
+                            <circle cx="36" cy="36" r="28" fill="none"
+                              stroke={color} strokeWidth="8" strokeLinecap="round"
+                              strokeDasharray={`${(sig.score / 100) * circ} ${circ}`}
+                              transform="rotate(-90 36 36)"
+                              style={{ transition: 'stroke-dasharray 0.6s ease' }}
+                            />
+                            <text x="36" y="41" textAnchor="middle" fontSize="15" fontWeight="700" fill="#111827">
+                              {sig.score}
+                            </text>
+                          </svg>
+                          <div className="text-center">
+                            <p className="text-[11px] font-semibold text-[#374151]">{label}</p>
+                            <p className={`text-[10px] font-medium ${wordColor}`}>{sig.label}</p>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl p-3 mt-2">
+                    <p className="text-xs text-[#047857] leading-relaxed">
+                      {investmentSignals.demand.score >= 75 ? 'Strong demand' : 'Moderate demand'} and infrastructure
+                      {cityData && cityData.capitalGrowth5yr > 15 ? ` — ${cityData.capitalGrowth5yr}% 5yr capital growth` : ''} support long-term rental resilience.
+                    </p>
+                  </div>
+                  <p className="text-[10px] text-[#9CA3AF] mt-2">
+                    {investmentSignals.demand.source} · {investmentSignals.areaDescription}
+                  </p>
                 </div>
 
-                {/* ── Ownership Toggle + History Preview (col 10–12) ─────── */}
-                <div className="col-span-12 lg:col-span-3 space-y-5">
-                  {/* Ownership toggle */}
-                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-4 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                      <div>
-                        <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Ownership</p>
-                        <p className="text-xs text-[#9CA3AF] mt-0.5">Choose how this property will be assessed</p>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1 bg-[#F3F4F6] rounded-xl p-1">
-                      <button
-                        type="button"
-                        onClick={() => setOwnershipType('personal')}
-                        aria-pressed={ownershipType === 'personal'}
-                        aria-label="Use personal ownership"
-                        className={`rounded-lg px-3 py-2 text-sm font-semibold transition-all ${ownershipType === 'personal' ? 'bg-[#047857] text-white shadow-sm' : 'text-[#6B7280] hover:text-[#111827]'}`}
-                      >
-                        Personal
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setOwnershipType('company')}
-                        aria-pressed={ownershipType === 'company'}
-                        aria-label="Use limited company ownership"
-                        className={`rounded-lg px-3 py-2 text-sm font-semibold transition-all ${ownershipType === 'company' ? 'bg-[#047857] text-white shadow-sm' : 'text-[#6B7280] hover:text-[#111827]'}`}
-                      >
-                        Ltd Company
-                      </button>
-                    </div>
-                  </div>
-
+                {/* ── History Preview (col 10–12) ─────────────────────────── */}
+                <div className="col-span-12 lg:col-span-3">
                   {/* History Preview */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-4">
@@ -796,8 +831,8 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                       <p className="text-xs text-[#9CA3AF]">May be newly built or not yet registered with Land Registry.</p>
                     </div>
                   )}
-                  </div>{/* end History Preview */}
-                </div>{/* end Ownership + History wrapper */}
+                  </div>{/* end History Preview card */}
+                </div>{/* end History Preview column */}
 
                 {/* Data bar */}
                 <div className="col-span-12 bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3 flex gap-6 flex-wrap text-xs text-[#6B7280]">
