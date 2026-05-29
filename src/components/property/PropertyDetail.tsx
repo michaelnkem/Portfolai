@@ -22,6 +22,10 @@ type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'market'
 
 const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
 
+const BEDROOM_AREA_LOOKUP: Record<number, number> = {
+  0: 35, 1: 50, 2: 70, 3: 90, 4: 115, 5: 140, 6: 160,
+}
+
 const NAV_ITEMS = [
   { icon: '⊞', label: 'Dashboard' },
   { icon: '⌂', label: 'Properties', active: true },
@@ -35,7 +39,6 @@ const NAV_ITEMS = [
   { icon: '◬', label: 'Alerts' },
 ]
 
-/* ── Skeleton shimmer card ─────────────────────────────────────────────────── */
 function SkeletonCard({ className = '' }: { className?: string }) {
   return (
     <div className={`bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] ${className}`}>
@@ -63,6 +66,8 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const [otherAnnualIncome, setOtherAnnualIncome] = useState(0)
   const [annualMortgageInterest, setAnnualMortgageInterest] = useState(0)
   const [showSection24, setShowSection24] = useState(false)
+  const [bedroomsOverride, setBedroomsOverride] = useState<number | null>(null)
+  const [editingBeds, setEditingBeds] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -79,100 +84,184 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     return () => el.removeEventListener('scroll', handler)
   }, [])
 
-  const p        = data.property    as Record<string, unknown>
-  const enriched = data.enriched    as Record<string, unknown>
-  const epc      = data.epc         as Record<string, unknown> | null
-  const risks    = data.risks       as Array<Record<string, unknown>> | undefined
+  // ── Data extraction ───────────────────────────────────────────────────────────
+  const p            = data.property    as Record<string, unknown>
+  const enriched     = data.enriched    as Record<string, unknown>
+  const epc          = data.epc         as Record<string, unknown> | null
+  const risks        = data.risks       as Array<Record<string, unknown>> | undefined
   const transactions = data.transactions as Array<Record<string, unknown>> | undefined
-  const cityName = data.cityName    as string
-  const cityData = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
+  const cityName     = data.cityName    as string
+  const cityData     = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
 
+  // Reset bedroom override when a different property is opened
+  const propertyIdentityKey = String(
+    p?.uprn || p?.id ||
+    `${String(p?.full_address || p?.address || '')}-${String(p?.postcode ?? '')}`
+  )
+  useEffect(() => {
+    setBedroomsOverride(null)
+    setEditingBeds(false)
+  }, [propertyIdentityKey])
+
+  // Property type resolved early — needed for floor-area and recalculation
+  const propType = String(p?.property_type ?? '')
+
+  // ── Floor area: strict source priority with verified/inferred tracking ─────────
+  const _faFromEpc = (() => {
+    const v = Number(
+      epc?.total_floor_area || epc?.totalFloorArea ||
+      epc?.floor_area       || epc?.floorArea      || 0
+    )
+    return v > 10 && v < 1000 ? v : null
+  })()
+
+  const _faFromEnriched = (() => {
+    const v = Number(enriched?.epcFloorArea || 0)
+    return v > 10 && v < 1000 ? v : null
+  })()
+
+  const _faFromProperty = (() => {
+    const v = Number(
+      p?.internal_area_sqm || p?.internalAreaSqm ||
+      p?.floor_area        || p?.floorArea       ||
+      p?.size_sqm          || p?.sizeSqm         || 0
+    )
+    return v > 10 && v < 1000 ? v : null
+  })()
+
+  const floorArea: number | null = _faFromEpc || _faFromEnriched || _faFromProperty || null
+  const floorAreaVerified        = !!(_faFromEpc || _faFromEnriched)
+  const floorAreaSource: string | null = _faFromEpc
+    ? (String(epc?.source ?? '') === 'epc_open_data' ? 'EPC' : 'Homedata EPC')
+    : _faFromEnriched ? 'EPC'
+    : _faFromProperty ? 'Homedata'
+    : null
+
+  // ── Calculations ──────────────────────────────────────────────────────────────
   const effectiveRent = rentSet ? rent : (enriched?.estimatedRent as number || 0)
-  const price = Number(p?.last_sold_price ?? 0)
-  const soldYear = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
-  const yearsHeld = Math.max(0, 2026 - soldYear)
-  const annualGrowth = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
-  const estimatedCurrentValue = (enriched?.estimatedCurrentValue as number)
-    || (price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0)
+  const price         = Number(p?.last_sold_price ?? 0)
+  const soldYear      = Number(String(p?.last_sold_date ?? '2020').slice(0, 4))
+  const yearsHeld     = Math.max(0, 2026 - soldYear)
+  const annualGrowth  = cityData ? (cityData.capitalGrowth5yr / 5) / 100 : 0.025
+  const _fallback     = price ? Math.round(price * Math.pow(1 + annualGrowth, yearsHeld)) : 0
 
-  const _soldP = Number(p?.last_sold_price ?? 0)
-  const yieldPrice = (_soldP > 0) ? _soldP : (estimatedCurrentValue > 0 ? estimatedCurrentValue : 0)
+  // Original bedroom count — preserves existing logic exactly, used as recalc anchor
+  const originalPropertyBeds = (() => {
+    if (enriched?.attrBedrooms != null) return Number(enriched.attrBedrooms)
+    if (Number(p?.bedrooms) > 0) return Number(p.bedrooms)
+    return 0
+  })()
+
+  // Estimated Current Value — recalculates locally when bedroom override is active
+  const estimatedCurrentValue = (() => {
+    const serverValue = Number(
+      enriched?.estimatedCurrentValue ||
+      p?.estimated_current_value      ||
+      p?.estimatedCurrentValue        ||
+      0
+    )
+    const anchor = serverValue > 0 ? serverValue : _fallback
+    if (!Number.isFinite(anchor) || anchor <= 0) return _fallback
+    if (bedroomsOverride === null) return anchor
+
+    const lookupArea = BEDROOM_AREA_LOOKUP[bedroomsOverride]
+    if (!lookupArea) return anchor
+
+    const ptl        = propType.toLowerCase()
+    const isDetached = ptl.includes('detached') && !ptl.includes('semi')
+    const corrected  = isDetached ? lookupArea * 1.2 : lookupArea
+
+    const originalArea =
+      floorArea && floorArea > 10
+        ? floorArea
+        : originalPropertyBeds && BEDROOM_AREA_LOOKUP[originalPropertyBeds]
+          ? BEDROOM_AREA_LOOKUP[originalPropertyBeds]
+          : corrected
+
+    if (!Number.isFinite(originalArea) || originalArea <= 0) return anchor
+    return Math.round((anchor / originalArea * corrected) / 1000) * 1000
+  })()
+
+  // Yield price basis: last sold price first, fall back to estimated current value
+  const _soldP          = Number(p?.last_sold_price ?? 0)
+  const yieldPrice      = (_soldP > 0) ? _soldP : (estimatedCurrentValue > 0 ? estimatedCurrentValue : 0)
   const yieldPriceSource: 'last_sold_price' | 'estimated_current_value' | null =
     _soldP > 0 ? 'last_sold_price' : estimatedCurrentValue > 0 ? 'estimated_current_value' : null
 
-  const grossYield = yieldPrice && effectiveRent
+  const grossYield  = yieldPrice && effectiveRent
     ? parseFloat(((effectiveRent * 12 / yieldPrice) * 100).toFixed(2)) : 0
-  const netYield = yieldPrice && effectiveRent
+  const netYield    = yieldPrice && effectiveRent
     ? parseFloat((calcNetMonthlyIncome(yieldPrice, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) * 12 / yieldPrice * 100).toFixed(2)) : 0
-  const netMonthly = yieldPrice && effectiveRent
+  const netMonthly  = yieldPrice && effectiveRent
     ? calcNetMonthlyIncome(yieldPrice, effectiveRent, serviceCharge, groundRent, mgmtFee, maintenance, voidWks) : 0
   const capitalGrowth = cityData?.capitalGrowth1yr || 0
-  const totalROI = parseFloat((netYield + capitalGrowth).toFixed(1))
-  const sdlt = price ? calcSDLT(price, true) : 0
-  const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
-  const cashflow = mort ? netMonthly - mort.monthly : netMonthly
+  const totalROI    = parseFloat((netYield + capitalGrowth).toFixed(1))
+  const sdlt        = price ? calcSDLT(price, true) : 0
+  const mort        = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
+  const cashflow    = mort ? netMonthly - mort.monthly : netMonthly
 
   const s24: Section24Result | null = showSection24 && effectiveRent > 0
     ? calcSection24({
-        annualRentalIncome: effectiveRent * 12,
+        annualRentalIncome:      effectiveRent * 12,
         otherAnnualIncome,
         annualMortgageInterest,
-        annualAllowableExpenses: Math.round(effectiveRent * 12 * (mgmtFee / 100)) + Math.round((price || 0) * maintenance / 100) + serviceCharge + groundRent + Math.round(effectiveRent * voidWks / 4.33),
+        annualAllowableExpenses: Math.round(effectiveRent * 12 * (mgmtFee / 100))
+          + Math.round((price || 0) * maintenance / 100)
+          + serviceCharge + groundRent
+          + Math.round(effectiveRent * voidWks / 4.33),
       })
     : null
 
+  // ── EPC resolution (priority: homedata.epc → epc open data → property record) ─
   const epcRaw = String(
-    epc?.current_energy_rating ||
-    epc?.currentEnergyRating ||
-    epc?.rating ||
-    epc?.energy_rating ||
-    enriched?.epcRating ||
+    epc?.current_energy_rating  ||
+    epc?.currentEnergyRating    ||
+    epc?.energy_rating          ||
+    epc?.rating                 ||
+    enriched?.epcRating         ||
     enriched?.current_energy_rating ||
-    p?.current_energy_rating ||
-    p?.epc_rating ||
+    p?.current_energy_rating    ||
+    p?.currentEnergyRating      ||
+    p?.epc_rating               ||
+    p?.epcRating                ||
     ''
   ).trim().toUpperCase()
-  const epcRating  = epcRaw.match(/[A-G]/)?.[0] ?? '?'
-  const epcKnown   = epcRating !== '?'
+  const epcRating   = epcRaw.match(/[A-G]/)?.[0] ?? '?'
+  const epcKnown    = epcRating !== '?'
   const epcCompliant = epcKnown && epcRating <= 'C'
 
-  const floorArea =
-    (epc?.total_floor_area  ? Number(epc.total_floor_area)  : null) ||
-    (epc?.totalFloorArea    ? Number(epc.totalFloorArea)    : null) ||
-    (enriched?.epcFloorArea ? Number(enriched.epcFloorArea) : null) ||
-    (p?.internal_area_sqm   ? Number(p.internal_area_sqm)  : null) ||
-    (p?.epc_floor_area      ? Number(p.epc_floor_area)      : null) ||
-    null
-
+  // ── Attribute resolution ──────────────────────────────────────────────────────
   const bedsLabel = (() => {
+    if (bedroomsOverride !== null) return String(bedroomsOverride)
     const enrichedLabel = String(enriched?.attrBedroomsLabel ?? '')
     if (enrichedLabel && enrichedLabel !== '0' && enrichedLabel !== 'Unknown') return enrichedLabel
     const rawBeds = Number(p?.bedrooms)
     if (rawBeds > 0) return String(rawBeds)
     return 'Not recorded'
   })()
-  const bathsLabel   = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : ''))
-  const tenureLabel  = String(enriched?.attrTenureLabel    || String(p?.tenure ?? '') || '')
-  const gardenLabel  = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Rear Garden' : p?.has_garden === false ? 'No' : ''))
-  const propType     = String(p?.property_type ?? '')
+  const bathsLabel     = String(enriched?.attrBathroomsLabel || (p?.bathrooms != null ? `${p.bathrooms}` : ''))
+  const tenureLabel    = String(enriched?.attrTenureLabel    || String(p?.tenure ?? '') || '')
+  const gardenLabel    = String(enriched?.attrGardenLabel    || (p?.has_garden === true ? 'Rear Garden' : p?.has_garden === false ? 'No' : ''))
   const bedsInferred   = Boolean(enriched?.attrBedroomsInferred)
   const bathsInferred  = Boolean(enriched?.attrBathroomsInferred)
   const tenureInferred = Boolean(enriched?.attrTenureInferred)
   const gardenInferred = Boolean(enriched?.attrGardenInferred)
-  const anyInferred    = bedsInferred || bathsInferred || tenureInferred || gardenInferred
+  const floorAreaInferred = !floorAreaVerified && floorArea !== null
+  const anyInferred    = (bedroomsOverride === null ? bedsInferred : false)
+    || bathsInferred || tenureInferred || gardenInferred || floorAreaInferred
 
   const address  = String(p?.full_address || p?.address || 'Unknown Address')
   const postcode = String(p?.postcode ?? '')
 
-  const propertyBeds = enriched?.attrBedrooms != null ? Number(enriched.attrBedrooms)
-    : Number(p?.bedrooms) > 0 ? Number(p.bedrooms) : 0
+  // propertyBeds: override takes priority, then original derived value
+  const propertyBeds = bedroomsOverride !== null ? bedroomsOverride : originalPropertyBeds
 
   const tabs: { id: DetailTab; label: string }[] = [
-    { id: 'overview',   label: 'Overview'           },
-    { id: 'financials', label: 'Financials'         },
-    { id: 'history',    label: 'History'            },
-    { id: 'risks',      label: 'Risks'              },
-    { id: 'market',     label: 'Market Comparison'  },
+    { id: 'overview',   label: 'Overview'          },
+    { id: 'financials', label: 'Financials'        },
+    { id: 'history',    label: 'History'           },
+    { id: 'risks',      label: 'Risks'             },
+    { id: 'market',     label: 'Market Comparison' },
   ]
 
   const epcColor = !epcKnown ? 'text-[#D1D5DB]'
@@ -186,9 +275,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     ? 'bg-[#FFF7E6] text-[#B7791F] border-[#F5D48A]'
     : 'bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5]'
 
-  const confidenceScore = enriched?.valuationConfidence ? Number(enriched.valuationConfidence) : null
-  const comparablesCount = transactions?.length ?? 0
-  const dataQuality = Math.min(97, 60 + (comparablesCount * 5) + (epcKnown ? 10 : 0) + (floorArea ? 7 : 0))
+  const confidenceScore   = enriched?.valuationConfidence ? Number(enriched.valuationConfidence) : null
+  const comparablesCount  = transactions?.length ?? 0
+  const dataQuality       = Math.min(97, 60 + (comparablesCount * 5) + (epcKnown ? 10 : 0) + (floorArea ? 7 : 0))
 
   const localMarketType = (() => {
     const beds = Number(p?.bedrooms ?? 0)
@@ -375,14 +464,16 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                     {estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
                   </p>
                   <div className="flex items-center gap-2 flex-wrap">
-                    {confidenceScore && (
+                    {confidenceScore && bedroomsOverride === null && (
                       <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
                         {confidenceScore}% confidence
                       </span>
                     )}
-                    {price && p?.last_sold_date && (
+                    {bedroomsOverride !== null ? (
+                      <p className="text-xs text-[#047857] font-medium">Recalculated using corrected bedroom count</p>
+                    ) : price && p?.last_sold_date ? (
                       <p className="text-xs text-[#6B7280]">Est. from {String(p.last_sold_date).slice(0, 4)} sale price</p>
-                    )}
+                    ) : null}
                   </div>
                 </div>
 
@@ -472,25 +563,57 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
             {tab === 'overview' && (
               <div className="grid grid-cols-12 gap-5">
 
+                {/* ── Property Details ── */}
                 <div className="col-span-12 lg:col-span-4 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Property Details</h3>
                   <div>
-                    {[
-                      { icon: '🛏', label: 'Bedrooms',   value: bedsLabel,                          inferred: bedsInferred,   epc: false, verified: false },
-                      { icon: '🛁', label: 'Bathrooms',  value: bathsLabel,                         inferred: bathsInferred,  epc: false, verified: false },
-                      { icon: '⊞', label: 'Floor Area',  value: floorArea ? `${floorArea} m²` : '', inferred: false,          epc: false, verified: !!(epc?.total_floor_area || enriched?.epcFloorArea) },
-                      { icon: '⚡', label: 'EPC Rating',  value: epcKnown ? epcRating : '',          inferred: false,          epc: true,  verified: false },
-                      { icon: '🌿', label: 'Garden',     value: gardenLabel,                         inferred: gardenInferred, epc: false, verified: false },
-                      { icon: '🏠', label: 'Type',       value: propType,                            inferred: false,          epc: false, verified: false },
-                      { icon: '📋', label: 'Tenure',     value: tenureLabel,                         inferred: tenureInferred, epc: false, verified: false },
-                    ].filter(r => r.value || r.label === 'Bedrooms').map(row => (
+                    {([
+                      { icon: '🛏', label: 'Bedrooms',  value: bedsLabel,                          inferred: bedroomsOverride === null ? bedsInferred : false,   epc: false, verified: false,           verifiedSource: undefined },
+                      { icon: '🛁', label: 'Bathrooms', value: bathsLabel,                         inferred: bathsInferred,  epc: false, verified: false,           verifiedSource: undefined },
+                      { icon: '⊞', label: 'Floor Area', value: floorArea ? `${floorArea} m²` : '', inferred: floorAreaInferred, epc: false, verified: floorAreaVerified, verifiedSource: floorAreaSource ?? undefined },
+                      { icon: '⚡', label: 'EPC Rating', value: epcKnown ? epcRating : '',          inferred: false,          epc: true,  verified: false,           verifiedSource: undefined },
+                      { icon: '🌿', label: 'Garden',    value: gardenLabel,                         inferred: gardenInferred, epc: false, verified: false,           verifiedSource: undefined },
+                      { icon: '🏠', label: 'Type',      value: propType,                            inferred: false,          epc: false, verified: false,           verifiedSource: undefined },
+                      { icon: '📋', label: 'Tenure',    value: tenureLabel,                         inferred: tenureInferred, epc: false, verified: false,           verifiedSource: undefined },
+                    ] as Array<{ icon: string; label: string; value: string; inferred: boolean; epc: boolean; verified: boolean; verifiedSource?: string }>)
+                      .filter(r => r.value || r.label === 'Bedrooms')
+                      .map(row => (
                       <div key={row.label} className="flex items-center justify-between py-3 border-b border-[#F3F4F6] last:border-0">
                         <div className="flex items-center gap-2.5">
                           <span className="text-base w-5 text-center">{row.icon}</span>
                           <span className="text-sm text-[#475569]">{row.label}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
-                          {row.epc ? (
+                          {row.label === 'Bedrooms' ? (
+                            editingBeds ? (
+                              <div className="flex items-center gap-1 flex-wrap justify-end">
+                                {[1, 2, 3, 4, 5, 6].map(n => (
+                                  <button key={n} type="button"
+                                    aria-label={`Set bedroom count to ${n}`}
+                                    onClick={() => { setBedroomsOverride(n); setEditingBeds(false) }}
+                                    className="w-7 h-7 flex items-center justify-center text-xs font-semibold rounded-lg border border-[#E7E5DD] bg-white text-[#111827] hover:bg-[#ECFDF5] hover:border-[#A7F3D0] hover:text-[#047857] transition-colors">
+                                    {n}
+                                  </button>
+                                ))}
+                                <button type="button" aria-label="Cancel bedroom correction"
+                                  onClick={() => setEditingBeds(false)}
+                                  className="text-[11px] text-[#6B7280] ml-1 px-1 hover:text-[#111827] transition-colors">
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-sm font-semibold ${bedroomsOverride !== null ? 'text-[#047857]' : bedsInferred ? 'text-[#B7791F]' : 'text-[#111827]'}`}>
+                                  {bedsLabel}{bedroomsOverride !== null ? ' ✓' : bedsInferred ? ' *' : ''}
+                                </span>
+                                <button type="button" aria-label="Correct bedroom count"
+                                  onClick={() => setEditingBeds(true)}
+                                  className="text-xs font-semibold px-2 py-0.5 rounded-lg bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857] hover:bg-[#D1FAE5] transition-colors">
+                                  {bedroomsOverride !== null ? 'Edit' : 'Correct?'}
+                                </button>
+                              </div>
+                            )
+                          ) : row.epc ? (
                             <span className={`text-sm font-bold px-2.5 py-0.5 rounded-lg border ${epcBadgeClass}`}>
                               {row.value}
                             </span>
@@ -499,21 +622,27 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                               {row.value}{row.inferred ? ' *' : ''}
                             </span>
                           )}
-                          {row.verified && (
-                            <span className="text-[10px] bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded font-bold">EPC</span>
+                          {row.label !== 'Bedrooms' && row.verified && (
+                            <span className="text-[10px] bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded font-bold">
+                              {row.verifiedSource || 'EPC'}
+                            </span>
                           )}
                         </div>
                       </div>
                     ))}
                   </div>
                   {anyInferred && (
-                    <p className="text-[11px] text-[#9CA3AF] mt-3">* Estimated from floor area and local property norms.</p>
+                    <p className="text-[11px] text-[#9CA3AF] mt-3">
+                      * Estimated from floor area and local property norms.
+                      {floorAreaInferred ? ' Floor area from Homedata property record.' : ''}
+                    </p>
                   )}
                   <div className="mt-4 pt-4 border-t border-[#F3F4F6]">
                     <p className="text-[11px] text-[#9CA3AF]">Sources: Land Registry · EPC Open Data · Homedata · UK HPI</p>
                   </div>
                 </div>
 
+                {/* ── Investment Signals ── */}
                 <div className="col-span-12 lg:col-span-5 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Investment Signals</h3>
                   <p className="text-[11px] text-[#9CA3AF] mb-4">Scores are based on 100-point scale. Higher is better.</p>
@@ -566,6 +695,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
+                {/* ── History Preview ── */}
                 <div className="col-span-12 lg:col-span-3 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">History Preview</h3>
@@ -608,6 +738,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
+                {/* Data bar */}
                 <div className="col-span-12 bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3 flex gap-6 flex-wrap text-xs text-[#6B7280]">
                   <span>UPRN: <strong className="text-[#374151]">{String(p?.uprn ?? '')}</strong></span>
                   <span>Postcode: <strong className="text-[#374151]">{postcode}</strong></span>
@@ -713,10 +844,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     {[
-                      { label: 'LTV',        value: mort ? `${mort.ltv}%`                     : '—', color: 'text-[#111827]'  },
+                      { label: 'LTV',        value: mort ? `${mort.ltv}%`                         : '—', color: 'text-[#111827]'  },
                       { label: 'Mortgage',   value: mort ? `£${mort.monthly.toLocaleString()}/mo` : '—', color: 'text-[#DC2626]'  },
-                      { label: 'Net Income', value: `£${netMonthly.toLocaleString()}/mo`,               color: 'text-[#047857]'  },
-                      { label: 'Cashflow',   value: `£${cashflow.toLocaleString()}/mo`,                 color: cashflow >= 0 ? 'text-[#047857]' : 'text-[#DC2626]' },
+                      { label: 'Net Income', value: `£${netMonthly.toLocaleString()}/mo`,                color: 'text-[#047857]'  },
+                      { label: 'Cashflow',   value: `£${cashflow.toLocaleString()}/mo`,                  color: cashflow >= 0 ? 'text-[#047857]' : 'text-[#DC2626]' },
                     ].map(kpi => (
                       <div key={kpi.label} className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4">
                         <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1.5">{kpi.label}</p>
@@ -902,8 +1033,8 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Environmental Risks — Homedata</h3>
                     {risks.map((r, i) => {
-                      const score = Number(r.score ?? 0)
-                      const label = String(r.label ?? '')
+                      const score    = Number(r.score ?? 0)
+                      const label    = String(r.label ?? '')
                       const riskType = String(r.risk_type ?? '').replace(/_/g, ' ')
                       const badgeCls = score <= 1
                         ? 'bg-[#ECFDF5] text-[#047857]'
@@ -999,7 +1130,7 @@ function LightCityMarketPanel({
   fullWidth?: boolean
 }) {
   const [selectedCity, setSelectedCity] = useState(cityName)
-  const bedKey = (n: number) => n === 0 ? 'studio' : `${n}bed`
+  const bedKey        = (n: number) => n === 0 ? 'studio' : `${n}bed`
   const defaultBedKey = bedKey(propertyBeds)
   const [selectedBed, setSelectedBed] = useState(defaultBedKey)
 
