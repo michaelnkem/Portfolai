@@ -165,11 +165,21 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
     return Math.round((anchor / originalArea * corrected) / 1000) * 1000
   })()
 
-  // Yield price basis: last sold price first, fall back to estimated current value
+  // Yield price basis: estimated current value first, last sold price as fallback
+  // Using last_sold_price as primary denominator inflates yield for old transactions
   const _soldP = Number(p?.last_sold_price ?? 0)
-  const yieldPrice = (_soldP > 0) ? _soldP : (estimatedCurrentValue > 0 ? estimatedCurrentValue : 0)
-  const yieldPriceSource: 'last_sold_price' | 'estimated_current_value' | null =
-    _soldP > 0 ? 'last_sold_price' : estimatedCurrentValue > 0 ? 'estimated_current_value' : null
+  const yieldPrice =
+    estimatedCurrentValue > 0
+      ? estimatedCurrentValue
+      : _soldP > 0
+      ? _soldP
+      : 0
+  const yieldPriceSource: 'estimated_current_value' | 'last_sold_price' | null =
+    estimatedCurrentValue > 0
+      ? 'estimated_current_value'
+      : _soldP > 0
+      ? 'last_sold_price'
+      : null
 
   const grossYield = yieldPrice && effectiveRent
     ? parseFloat(((effectiveRent * 12 / yieldPrice) * 100).toFixed(2)) : 0
@@ -181,6 +191,22 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
   const totalROI = parseFloat((netYield + capitalGrowth).toFixed(1))
   const sdlt = price ? calcSDLT(price, true) : 0
   const mort = price && deposit ? calcMortgagePayment(price, deposit, mortRate, mortYears) : null
+
+  // ── Area average yields ───────────────────────────────────────────────────────
+  const areaAvgGrossYield =
+    cityData && Number(cityData.avgYield) > 0
+      ? Number(cityData.avgYield)
+      : null
+
+  const areaAvgNetYield = (() => {
+    if (!areaAvgGrossYield) return null
+    const explicitNet =
+      Number((cityData as Record<string, unknown>)?.avgNetYield ?? 0) ||
+      Number((cityData as Record<string, unknown>)?.netYield ?? 0) ||
+      Number((cityData as Record<string, unknown>)?.avg_net_yield ?? 0)
+    if (explicitNet > 0) return parseFloat(explicitNet.toFixed(1))
+    return parseFloat(Math.max(0, areaAvgGrossYield - 1.2).toFixed(1))
+  })()
 
   const s24: Section24Result | null = showSection24 && effectiveRent > 0
     ? calcSection24({
@@ -259,6 +285,21 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
       totalROISubLabel: 'Company tax + cap growth',
     }
   })()
+
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('[yield-debug]', {
+      effectiveRent,
+      annualRent: effectiveRent * 12,
+      estimatedCurrentValue,
+      lastSoldPrice: _soldP,
+      yieldPrice,
+      yieldPriceSource,
+      grossYield,
+      netYield,
+      ownershipType,
+      ownershipAwareNetYield: ownershipFinancials.netYield,
+    })
+  }
 
   // ── EPC resolution ───────────────────────────────────────────────────────────
   const epcRaw = String(
@@ -552,9 +593,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                       style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
                       {grossYield ? `${grossYield}%` : '—'}
                     </p>
-                    {cityData && <p className="text-xs text-[#6B7280]">Area avg {cityData.avgYield}%</p>}
-                    {yieldPriceSource === 'estimated_current_value' && (
-                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
+                    {areaAvgGrossYield && <p className="text-xs text-[#6B7280]">Area avg {areaAvgGrossYield}%</p>}
+                    {yieldPriceSource === 'last_sold_price' && (
+                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on last sold price</p>
                     )}
                   </div>
 
@@ -566,8 +607,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                       {ownershipFinancials.netYield ? `${ownershipFinancials.netYield}%` : '—'}
                     </p>
                     <p className="text-xs text-[#6B7280]">{ownershipFinancials.netYieldSubLabel}</p>
-                    {yieldPriceSource === 'estimated_current_value' && (
-                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on est. value</p>
+                    {areaAvgNetYield !== null && (
+                      <p className="text-xs text-[#6B7280]">Area avg {areaAvgNetYield}%</p>
+                    )}
+                    {yieldPriceSource === 'last_sold_price' && (
+                      <p className="text-[10px] text-[#B7791F] mt-0.5">Based on last sold price</p>
                     )}
                   </div>
 
