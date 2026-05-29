@@ -6,7 +6,7 @@ import { AIAdvisor } from '@/components/ai/AIAdvisor'
 import { MarketIntel } from '@/components/property/MarketIntel'
 import { Portfolio } from '@/components/property/Portfolio'
 import { ROICalculator } from '@/components/property/ROICalculator'
-import { MARKET_DATA } from '@/lib/market-data'
+import { MARKET_DATA, calcNetMonthlyIncome } from '@/lib/market-data'
 import { PropertyFinder } from '@/components/property/PropertyFinder'
 
 export type Tab = 'search' | 'market' | 'portfolio' | 'calculator' | 'favourites' | 'alerts' | 'property-finder' | 'property-analysis'
@@ -55,6 +55,22 @@ function resolveValue(item: Record<string, unknown>): number {
   return Number(e?.estimatedCurrentValue || p?.last_sold_price || 0) || 0
 }
 
+function resolveSavedPropertyNetYield(item: Record<string, unknown>): number | null {
+  const e = item.enriched as Record<string, unknown> | null
+  const p = item.property as Record<string, unknown> | null
+  const price = Number(e?.estimatedCurrentValue || 0)
+  if (!price) return null
+  const monthlyRent = Number(e?.estimatedRent || 0)
+  if (!monthlyRent) return null
+  const isFlat = String(p?.property_type || '').toLowerCase().includes('flat')
+  const isLeasehold = String(p?.tenure || '').toLowerCase().includes('leasehold')
+  const serviceCharge = isFlat ? 2000 : 0
+  const groundRent = isLeasehold ? 200 : 0
+  const netMonthly = calcNetMonthlyIncome(price, monthlyRent, serviceCharge, groundRent)
+  if (netMonthly <= 0) return null
+  return parseFloat(((netMonthly * 12 / price) * 100).toFixed(2))
+}
+
 export default function Home() {
   const [tab, setTab] = useState<Tab>('search')
   const [marketPropertyContext, setMarketPropertyContext] = useState<Record<string, unknown> | null>(null)
@@ -68,6 +84,7 @@ export default function Home() {
   const [aiProperty, setAiProperty] = useState<Record<string, unknown> | null>(null)
   const [portfolio, setPortfolio] = useState<Array<Record<string, unknown>>>([])
   const [favourites, setFavourites] = useState<Set<string>>(new Set())
+  const [favouriteProperties, setFavouriteProperties] = useState<Array<Record<string, unknown>>>([])
   const [selectedCity, setSelectedCity] = useState<CityKey | ''>('')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchSuggestions, setSearchSuggestions] = useState<Record<string, unknown>[]>([])
@@ -138,9 +155,9 @@ export default function Home() {
   }, [])
 
   const addToPortfolio = useCallback((property: Record<string, unknown>) => {
+    const uprn = String((property.property as Record<string, unknown>)?.uprn ?? '')
     setPortfolio(prev => {
-      const uprn = (property.property as Record<string, unknown>)?.uprn
-      if (prev.some(p => (p.property as Record<string, unknown>)?.uprn === uprn)) return prev
+      if (uprn && prev.some(p => String((p.property as Record<string, unknown>)?.uprn ?? '') === uprn)) return prev
       return [...prev, property]
     })
   }, [])
@@ -148,27 +165,31 @@ export default function Home() {
   const addToFavourites = useCallback((property: Record<string, unknown>) => {
     const uprn = String((property.property as Record<string, unknown>)?.uprn ?? '')
     if (!uprn) return
-    // Ensure full property object is in portfolio backing store (required for Favourites page rendering)
-    setPortfolio(prev => {
-      if (prev.some(p => (p.property as Record<string, unknown>)?.uprn === uprn)) return prev
+    setFavouriteProperties(prev => {
+      if (prev.some(p => String((p.property as Record<string, unknown>)?.uprn ?? '') === uprn)) return prev
       return [...prev, property]
     })
-    // Additive only — never remove from favourites via this handler
     setFavourites(prev => { const next = new Set(prev); next.add(uprn); return next })
   }, [])
 
   const removeFromPortfolio = useCallback((uprn: string) => {
-    setPortfolio(prev => prev.filter(p => (p.property as Record<string, unknown>)?.uprn !== uprn))
-    setFavourites(prev => { const n = new Set(prev); n.delete(uprn); return n })
+    setPortfolio(prev => prev.filter(p => String((p.property as Record<string, unknown>)?.uprn ?? '') !== uprn))
   }, [])
 
-  const toggleFavourite = useCallback((uprn: string) => {
-    setFavourites(prev => {
-      const next = new Set(prev)
-      if (next.has(uprn)) next.delete(uprn); else next.add(uprn)
-      return next
-    })
+  const removeFromFavourites = useCallback((uprn: string) => {
+    setFavouriteProperties(prev => prev.filter(p => String((p.property as Record<string, unknown>)?.uprn ?? '') !== uprn))
+    setFavourites(prev => { const next = new Set(prev); next.delete(uprn); return next })
   }, [])
+
+  const toggleFavourite = useCallback((property: Record<string, unknown>) => {
+    const uprn = String((property.property as Record<string, unknown>)?.uprn ?? '')
+    if (!uprn) return
+    if (favourites.has(uprn)) {
+      removeFromFavourites(uprn)
+    } else {
+      addToFavourites(property)
+    }
+  }, [favourites, addToFavourites, removeFromFavourites])
 
   const m = MARKET_DATA.macro
   const cityKeys = Object.keys(MARKET_DATA.cities) as CityKey[]
@@ -190,9 +211,7 @@ export default function Home() {
     { label: 'UK HPI 1YR',     value: `+${m.ukHpi1yr}%`,                         sub: 'yr/yr · ONS Feb 2026',          color: '#047857', si: 5 },
   ]
 
-  const favouriteItems = portfolio.filter(item =>
-    favourites.has(String((item.property as Record<string, unknown>)?.uprn ?? ''))
-  )
+  const favouriteItems = favouriteProperties
 
   const NAV_ITEMS: Array<{ icon: string; label: string; id: Tab; action?: () => void }> = [
     { icon: '⊞', label: 'Discover',          id: 'search'            },
@@ -237,9 +256,9 @@ export default function Home() {
                     {portfolio.length}
                   </span>
                 )}
-                {item.id === 'favourites' && !item.action && favourites.size > 0 && (
+                {item.id === 'favourites' && !item.action && favouriteProperties.length > 0 && (
                   <span className="hidden lg:flex ml-auto text-[10px] font-bold bg-[#B7791F] text-white w-5 h-5 rounded-full items-center justify-center">
-                    {favourites.size}
+                    {favouriteProperties.length}
                   </span>
                 )}
               </button>
@@ -473,7 +492,7 @@ export default function Home() {
                                     </button>
                                   </td>
                                   <td className="px-4 py-3">
-                                    <button onClick={e => { e.stopPropagation(); toggleFavourite(uprn) }}
+                                    <button onClick={e => { e.stopPropagation(); toggleFavourite(item) }}
                                       className={`text-xl transition-colors ${isFav ? 'text-[#B7791F]' : 'text-[#D1D5DB] hover:text-[#B7791F]'}`}>
                                       {isFav ? '★' : '☆'}
                                     </button>
@@ -518,16 +537,15 @@ export default function Home() {
                       <div className="px-6 py-10 text-center">
                         <p className="text-2xl mb-2 text-[#D1D5DB]">☆</p>
                         <p className="text-sm font-semibold text-[#374151] mb-1">No favourites yet</p>
-                        <p className="text-xs text-[#9CA3AF]">Click the star icon on saved properties to add them here.</p>
+                        <p className="text-xs text-[#9CA3AF]">Use &quot;Add to → Favourite&quot; in Property Analysis to save properties here.</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-5">
                         {favouriteItems.slice(0, 4).map((item, i) => {
                           const p = item.property as Record<string, unknown>
-                          const enriched = item.enriched as Record<string, unknown>
                           const addr = String(p?.full_address || p?.address || '')
                           const value = resolveValue(item)
-                          const grossYield = Number(enriched?.grossYield || 0)
+                          const netYield = resolveSavedPropertyNetYield(item)
                           return (
                             <div key={i}
                               className="flex items-center gap-3 bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl p-4 cursor-pointer hover:border-[#A7F3D0] transition-colors group"
@@ -540,7 +558,7 @@ export default function Home() {
                                   <span className="text-sm font-bold text-[#047857]" style={{ fontFamily: SERIF }}>
                                     {fmtVal(value)}
                                   </span>
-                                  {grossYield > 0 && <span className="text-xs text-[#B7791F] font-semibold">{grossYield.toFixed(1)}% yield</span>}
+                                  {netYield != null && <span className="text-xs text-[#B7791F] font-semibold">{netYield.toFixed(1)}% net yield</span>}
                                 </div>
                               </div>
                               <div className="flex flex-col items-end gap-2 shrink-0">
@@ -712,7 +730,7 @@ export default function Home() {
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
                   <p className="text-4xl mb-3 text-[#D1D5DB]">☆</p>
                   <p className="font-semibold text-[#374151] mb-2">No favourites yet</p>
-                  <p className="text-sm text-[#6B7280]">Star properties from your Saved Properties list to keep them here.</p>
+                  <p className="text-sm text-[#6B7280]">Use the &quot;Add to → Favourite&quot; button in Property Analysis to save properties here.</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -722,7 +740,7 @@ export default function Home() {
                     const uprn = String(p?.uprn ?? '')
                     const addr = String(p?.full_address || p?.address || '')
                     const value = resolveValue(item)
-                    const grossYield = Number(enriched?.grossYield || 0)
+                    const netYield = resolveSavedPropertyNetYield(item)
                     const totalROI = Number(enriched?.totalROI || 0)
                     const { rating: epc, known: epcKnown } = resolveEpc(item)
                     return (
@@ -736,7 +754,7 @@ export default function Home() {
                             <p className="text-xs text-[#9CA3AF] truncate">{addr.split(',').slice(1, 3).join(',').trim()}</p>
                             <p className="text-xs text-[#6B7280] mt-0.5">{String(p?.property_type ?? '')} · {String(item.cityName ?? '')}</p>
                           </div>
-                          <button onClick={e => { e.stopPropagation(); toggleFavourite(uprn) }}
+                          <button onClick={e => { e.stopPropagation(); toggleFavourite(item) }}
                             className="text-[#B7791F] text-xl shrink-0">★</button>
                         </div>
                         <div className="grid grid-cols-3 gap-3 mb-4">
@@ -745,8 +763,8 @@ export default function Home() {
                             <p className="text-sm font-bold text-[#111827]" style={{ fontFamily: SERIF }}>{fmtVal(value)}</p>
                           </div>
                           <div>
-                            <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] mb-1">Yield</p>
-                            <p className="text-sm font-bold text-[#047857]">{grossYield ? `${grossYield.toFixed(1)}%` : '—'}</p>
+                            <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] mb-1">Net Yield</p>
+                            <p className="text-sm font-bold text-[#047857]">{netYield != null ? `${netYield.toFixed(1)}%` : '—'}</p>
                           </div>
                           <div>
                             <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] mb-1">EPC</p>
