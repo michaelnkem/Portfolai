@@ -723,8 +723,40 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                   )}
                 </div>
 
-                {/* ── History Preview (col 10–12) ──────────────────────────── */}
-                <div className="col-span-12 lg:col-span-3 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                {/* ── Ownership Toggle + History Preview (col 10–12) ─────── */}
+                <div className="col-span-12 lg:col-span-3 space-y-5">
+                  {/* Ownership toggle */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-4 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Ownership</p>
+                        <p className="text-xs text-[#9CA3AF] mt-0.5">Choose how this property will be assessed</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 bg-[#F3F4F6] rounded-xl p-1">
+                      <button
+                        type="button"
+                        onClick={() => setOwnershipType('personal')}
+                        aria-pressed={ownershipType === 'personal'}
+                        aria-label="Use personal ownership"
+                        className={`rounded-lg px-3 py-2 text-sm font-semibold transition-all ${ownershipType === 'personal' ? 'bg-[#047857] text-white shadow-sm' : 'text-[#6B7280] hover:text-[#111827]'}`}
+                      >
+                        Personal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOwnershipType('company')}
+                        aria-pressed={ownershipType === 'company'}
+                        aria-label="Use limited company ownership"
+                        className={`rounded-lg px-3 py-2 text-sm font-semibold transition-all ${ownershipType === 'company' ? 'bg-[#047857] text-white shadow-sm' : 'text-[#6B7280] hover:text-[#111827]'}`}
+                      >
+                        Ltd Company
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* History Preview */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">History Preview</h3>
                     <button onClick={() => setTab('history')} className="text-xs text-[#047857] font-semibold hover:underline">
@@ -764,7 +796,8 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onHome, on
                       <p className="text-xs text-[#9CA3AF]">May be newly built or not yet registered with Land Registry.</p>
                     </div>
                   )}
-                </div>
+                  </div>{/* end History Preview */}
+                </div>{/* end Ownership + History wrapper */}
 
                 {/* Data bar */}
                 <div className="col-span-12 bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3 flex gap-6 flex-wrap text-xs text-[#6B7280]">
