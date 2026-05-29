@@ -7,8 +7,9 @@ import { MarketIntel } from '@/components/property/MarketIntel'
 import { Portfolio } from '@/components/property/Portfolio'
 import { ROICalculator } from '@/components/property/ROICalculator'
 import { MARKET_DATA } from '@/lib/market-data'
+import { PropertyFinder } from '@/components/property/PropertyFinder'
 
-export type Tab = 'search' | 'market' | 'portfolio' | 'calculator' | 'favourites' | 'alerts' | 'deal-finder' | 'property-analysis'
+export type Tab = 'search' | 'market' | 'portfolio' | 'calculator' | 'favourites' | 'alerts' | 'property-finder' | 'property-analysis'
 
 const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
 
@@ -189,7 +190,7 @@ export default function Home() {
     { icon: '★',  label: 'Favourites',        id: 'favourites'        },
     { icon: '🧮', label: 'Calculator',        id: 'calculator'        },
     { icon: '🤖', label: 'AI Analysis',       id: 'search',           action: () => openAI(null) },
-    { icon: '💼', label: 'Deal Finder',       id: 'deal-finder'       },
+    { icon: '🔍', label: 'Property Finder',    id: 'property-finder'   },
     { icon: '🔔', label: 'Alerts',            id: 'alerts'            },
   ]
 
@@ -806,39 +807,16 @@ export default function Home() {
             )
           )}
 
-          {/* ── DEAL FINDER ─────────────────────────────────────────────── */}
-          {tab === 'deal-finder' && (
-            <div className="max-w-[900px] mx-auto px-4 sm:px-6 lg:px-8 py-10">
-              <div className="mb-8">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#047857] mb-2">DEAL FINDER</p>
-                <h2 className="text-3xl font-bold text-[#111827] mb-2" style={{ fontFamily: SERIF }}>Find your next deal</h2>
-                <p className="text-sm text-[#6B7280]">AI-powered deal sourcing across the UK — below-market properties, high-yield opportunities, and off-market leads.</p>
-              </div>
-              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-14 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)] mb-6">
-                <p className="text-5xl mb-4">💼</p>
-                <p className="text-xl font-bold text-[#111827] mb-2" style={{ fontFamily: SERIF }}>Coming Soon</p>
-                <p className="text-sm text-[#6B7280] max-w-[400px] mx-auto leading-relaxed mb-6">
-                  Deal Finder will surface below-market properties, motivated sellers, and high-yield opportunities matched to your investment criteria.
-                </p>
-                <button onClick={() => openAI(null)}
-                  className="bg-[#047857] text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-[#065F46] transition-colors">
-                  🤖 Ask AI for Deal Ideas →
-                </button>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {[
-                  { icon: '📉', title: 'Below-Market Alerts', desc: 'Properties listed 10%+ below comparable sold prices in the same postcode.' },
-                  { icon: '🏚️', title: 'Value-Add Opportunities', desc: 'Properties with EPC D/E/F that can be upgraded for immediate yield uplift.' },
-                  { icon: '📬', title: 'Off-Market Leads', desc: 'Motivated sellers sourced directly — no auction, no agent competition.' },
-                ].map(f => (
-                  <div key={f.title} className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)] opacity-60">
-                    <p className="text-2xl mb-3">{f.icon}</p>
-                    <p className="text-sm font-bold text-[#111827] mb-1" style={{ fontFamily: SERIF }}>{f.title}</p>
-                    <p className="text-xs text-[#6B7280] leading-relaxed">{f.desc}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
+          {/* ── PROPERTY FINDER ─────────────────────────────────────────── */}
+          {tab === 'property-finder' && (
+            <PropertyFinder
+              favouriteItems={favouriteItems}
+              favourites={favourites}
+              onToggleFavourite={toggleFavourite}
+              onAddToPortfolio={addToPortfolio}
+              onOpenAnalysis={handleSelectProperty}
+              onGoToDiscover={() => handleTabChange('favourites')}
+            />
           )}
         </div>
       </div>
