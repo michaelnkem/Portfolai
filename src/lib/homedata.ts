@@ -111,53 +111,15 @@ export async function getProperty(uprn: string): Promise<PropertyRecord | null> 
   return data
 }
 
-// EPC data by UPRN — tries Homedata first, then free EPC public API
+// EPC data by UPRN
 export async function getEpc(uprn: string): Promise<EpcData | null> {
-  // Try Homedata first
-  try {
-    const res = await fetch(
-      `${HOMEDATA_BASE}/api/epc/${uprn}/`,
-      { headers: headers(), cache: 'no-store' },
-    )
-    if (res.ok) {
-      const data = await res.json()
-      const epc = data.data || data
-      if (epc?.current_energy_rating || epc?.current_energy_efficiency) return epc
-    }
-  } catch { /* fall through to public API */ }
-
-  // Fallback: EPC open data public API (no auth required)
-  // https://epc.opendatacommunities.org/docs/api
-  try {
-    const res = await fetch(
-      `https://epc.opendatacommunities.org/api/v1/domestic/uprn/${uprn}`,
-      {
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': 'Basic ' + Buffer.from('portfolai@example.com:').toString('base64'),
-        },
-        cache: 'no-store',
-      }
-    )
-    if (res.ok) {
-      const data = await res.json()
-      const row = data?.rows?.[0]
-      if (row) {
-        return {
-          uprn: Number(uprn),
-          current_energy_efficiency: Number(row['current-energy-efficiency'] || 0),
-          potential_energy_efficiency: Number(row['potential-energy-efficiency'] || 0),
-          last_epc_date: String(row['lodgement-date'] || ''),
-          epc_floor_area: Number(row['total-floor-area'] || 0),
-          construction_age_band: String(row['construction-age-band'] || ''),
-          epc_id: String(row['lmk-key'] || ''),
-          current_energy_rating: String(row['current-energy-rating'] || ''),
-        } as EpcData & { current_energy_rating: string }
-      }
-    }
-  } catch { /* both failed */ }
-
-  return null
+  const res = await fetch(
+    `${HOMEDATA_BASE}/api/epc/${uprn}/`,
+    { headers: headers(), cache: 'no-store' },
+  )
+  if (!res.ok) return null
+  const data = await res.json()
+  return data.data || data
 }
 
 // Environmental risks
@@ -202,6 +164,65 @@ export async function getComparables(uprn: string): Promise<SaleRecord[]> {
   if (!res.ok) return []
   const data = await res.json()
   return data.results || []
+}
+
+// ── Comparable Sales — Growth-plan endpoint ───────────────────────────────────
+export interface ComparableSale {
+  address:       string
+  postcode:      string
+  price:         number
+  date:          string
+  property_type: string
+  bedrooms:      number | null
+  floor_area:    number | null
+  uprn:          string | null
+  distance_m:    number | null
+}
+
+export async function getHomedataComparables(
+  uprn:        string,
+  radiusMiles = 0.5,
+  limit       = 25,
+): Promise<ComparableSale[]> {
+  try {
+    const url = `${HOMEDATA_BASE}/api/comparables/?uprn=${uprn}&radius=${radiusMiles}&limit=${limit}`
+    const res = await fetch(url, { headers: headers(), cache: 'no-store' })
+    if (!res.ok) {
+      console.log(`[homedata comps] ${res.status} for UPRN ${uprn}`)
+      return []
+    }
+
+    const data = await res.json()
+    const raw: unknown[] =
+      Array.isArray(data.results)     ? data.results
+      : Array.isArray(data.comparables) ? data.comparables
+      : Array.isArray(data.data)        ? data.data
+      : Array.isArray(data)             ? data
+      : []
+
+    const mapped: ComparableSale[] = raw.map((item: unknown) => {
+      const i = item as Record<string, unknown>
+      return {
+        address:       String(i.address || i.full_address || ''),
+        postcode:      String(i.postcode || i.post_code || ''),
+        price:         Number(i.price || i.sold_price || i.last_sold_price || 0),
+        date:          String(i.date || i.sold_date || i.last_sold_date || ''),
+        property_type: String(i.property_type || i.propertyType || ''),
+        bedrooms:      i.bedrooms != null ? Number(i.bedrooms) : null,
+        floor_area:    i.floor_area != null     ? Number(i.floor_area)
+                     : i.internal_area_sqm != null ? Number(i.internal_area_sqm)
+                     : i.epc_floor_area != null  ? Number(i.epc_floor_area)
+                     : null,
+        uprn:          i.uprn != null ? String(i.uprn) : null,
+        distance_m:    i.distance_m != null ? Number(i.distance_m) : null,
+      }
+    })
+
+    return mapped.filter(c => c.price > 10000 && c.date !== '')
+  } catch (e) {
+    console.error('[homedata comps] error:', e)
+    return []
+  }
 }
 
 // Flood risk (1 call)
