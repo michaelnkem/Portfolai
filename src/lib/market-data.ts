@@ -268,94 +268,233 @@ export function calcProjection(
 }
 
 // ── Section 24 Tax Calculator ─────────────────────────────────────────────────
-// UK 2026/27 income tax thresholds (England, Wales, Northern Ireland)
-export const PERSONAL_ALLOWANCE = 12570
-export const BASIC_RATE_LIMIT   = 50270
-export const HIGHER_RATE_LIMIT  = 125140
-
 export interface Section24Result {
-  taxableProfit:     number   // annual rental profit before mortgage interest deduction
-  incomeTaxOnRent:   number   // gross income tax attributable to rental profit
-  section24Credit:   number   // 20% basic-rate credit on annual mortgage interest
-  totalTaxPaid:      number   // net tax after Section 24 credit (never below zero)
-  afterTaxMonthly:   number   // actual monthly income after expenses, interest and tax
-  taxBand:           string   // 'Basic (20%)' | 'Higher (40%)' | 'Additional (45%)'
-  effectiveRate:     number   // % of taxable rental profit lost to tax
-  pushesIntoHigher:  boolean  // true when rental income tips investor into 40% band
+  taxableRentalProfit: number
+  taxOnRent: number
+  afterTaxCashIncome: number
+  taxBand: 'basic' | 'higher' | 'additional'
 }
 
-function _calcIncomeTax(income: number): number {
-  if (income <= PERSONAL_ALLOWANCE) return 0
-  let tax = 0
-  const basicTaxable = Math.min(income, BASIC_RATE_LIMIT) - PERSONAL_ALLOWANCE
-  if (basicTaxable > 0) tax += basicTaxable * 0.20
-  if (income > BASIC_RATE_LIMIT) {
-    tax += (Math.min(income, HIGHER_RATE_LIMIT) - BASIC_RATE_LIMIT) * 0.40
-  }
-  if (income > HIGHER_RATE_LIMIT) {
-    tax += (income - HIGHER_RATE_LIMIT) * 0.45
-  }
-  return tax
-}
+export function calcSection24({
+  annualRentalIncome,
+  otherAnnualIncome,
+  annualMortgageInterest,
+  annualAllowableExpenses,
+}: {
+  annualRentalIncome: number
+  otherAnnualIncome: number
+  annualMortgageInterest: number
+  annualAllowableExpenses: number
+}): Section24Result {
+  // 2026/27 thresholds
+  const PA  = 12_570   // Personal allowance
+  const BRL = 50_270   // Basic rate limit (total income)
+  const HRL = 125_140  // Higher rate limit
 
-export function calcSection24(
-  propertyPrice: number,
-  monthlyRent: number,
-  otherAnnualIncome: number,
-  annualMortgageInterest: number,
-  serviceCharge: number,
-  groundRent: number,
-  managementFee: number,
-  maintenanceAllowance: number,
-  voidWeeks: number,
-): Section24Result {
-  // STEP 1: Effective annual rent after voids
-  const annualRent = monthlyRent * ((52 - voidWeeks) / 52) * 12
+  // Under S24: mortgage interest is NOT an allowable expense — only other expenses
+  const taxableRentalProfit = Math.max(0, annualRentalIncome - annualAllowableExpenses)
 
-  // STEP 2: Allowable expenses (mortgage interest excluded under Section 24)
-  const mgmtCost  = annualRent * (managementFee / 100)
-  const maintCost = propertyPrice * (maintenanceAllowance / 100)
-  const allowable = mgmtCost + maintCost + serviceCharge + groundRent
+  // Total income for rate-band purposes
+  const totalIncome = otherAnnualIncome + taxableRentalProfit
+  const taxableIncome = Math.max(0, totalIncome - PA)
 
-  // STEP 3: Taxable profit — mortgage interest is NOT deducted
-  const taxableProfit = Math.max(0, annualRent - allowable)
+  // Determine marginal band
+  let taxBand: Section24Result['taxBand']
+  if (totalIncome > HRL) taxBand = 'additional'
+  else if (totalIncome > BRL) taxBand = 'higher'
+  else taxBand = 'basic'
 
-  // STEPS 4 & 5: Marginal tax on rental profit only
-  const totalIncome     = otherAnnualIncome + taxableProfit
-  const incomeTaxOnRent = Math.max(0, _calcIncomeTax(totalIncome) - _calcIncomeTax(otherAnnualIncome))
+  // Marginal rate applied to rental profit (simplified — assumes rental sits on top)
+  const rate = taxBand === 'additional' ? 0.45 : taxBand === 'higher' ? 0.40 : 0.20
 
-  // STEP 6: Section 24 credit — 20% of mortgage interest
-  const section24Credit = annualMortgageInterest * 0.20
+  const grossTax = Math.max(0, taxableRentalProfit * rate)
+  // S24 credit: 20% of mortgage interest, capped at tax liability
+  const s24Credit = Math.min(grossTax, annualMortgageInterest * 0.20)
+  const taxOnRent = Math.round(Math.max(0, grossTax - s24Credit))
 
-  // STEP 7: Net tax after credit
-  const totalTaxPaid = Math.max(0, incomeTaxOnRent - section24Credit)
-
-  // STEPS 8 & 9: After-tax monthly income
-  const netAnnual       = annualRent - allowable - annualMortgageInterest - totalTaxPaid
-  const afterTaxMonthly = Math.round(netAnnual / 12)
-
-  const taxBand = totalIncome > HIGHER_RATE_LIMIT
-    ? 'Additional (45%)'
-    : totalIncome > BASIC_RATE_LIMIT
-    ? 'Higher (40%)'
-    : 'Basic (20%)'
-
-  const effectiveRate = taxableProfit > 0
-    ? parseFloat(((totalTaxPaid / taxableProfit) * 100).toFixed(1))
-    : 0
-
-  const pushesIntoHigher =
-    otherAnnualIncome < BASIC_RATE_LIMIT &&
-    totalIncome > BASIC_RATE_LIMIT
+  const afterTaxCashIncome = Math.round(
+    annualRentalIncome - annualAllowableExpenses - annualMortgageInterest - taxOnRent
+  )
 
   return {
-    taxableProfit:    Math.round(taxableProfit),
-    incomeTaxOnRent:  Math.round(incomeTaxOnRent),
-    section24Credit:  Math.round(section24Credit),
-    totalTaxPaid:     Math.round(totalTaxPaid),
-    afterTaxMonthly,
+    taxableRentalProfit: Math.round(taxableRentalProfit),
+    taxOnRent,
+    afterTaxCashIncome,
     taxBand,
-    effectiveRate,
-    pushesIntoHigher,
   }
+}
+
+// ── Ltd Company / SPV Ownership Calculator ───────────────────────────────────
+const CORP_TAX_SMALL    = 0.19
+const CORP_TAX_MAIN     = 0.25
+const CORP_TAX_MARGIN   = 50_000
+const CORP_TAX_MAIN_LIM = 250_000
+const DIV_ALLOWANCE     = 500
+const DIV_BASIC         = 0.0875
+const DIV_HIGHER        = 0.3375
+const DIV_ADDITIONAL    = 0.3935
+
+export type ExtractionMethod = 'dividends' | 'salary' | 'retain'
+
+export interface CompanyResult {
+  companyTaxableProfit:   number
+  corpTax:                number
+  corpTaxRate:            number
+  netCompanyProfit:       number
+  dividendTax:            number
+  afterExtractionAnnual:  number
+  afterExtractionMonthly: number
+  mortgagePremiumAnnual:  number
+  accountancyCostAnnual:  number
+  extractionMethod:       ExtractionMethod
+}
+
+export interface ToggleComparison {
+  personal:      Section24Result & { afterTaxMonthly: number; s24CreditAnnual: number }
+  company:       CompanyResult
+  monthlyDiff:   number
+  annualDiff:    number
+  verdict:       'personal' | 'company' | 'neutral'
+  verdictReason: string
+  isBasicRate:   boolean
+}
+
+function _corpTaxRate(profit: number): number {
+  if (profit <= CORP_TAX_MARGIN)   return CORP_TAX_SMALL
+  if (profit >= CORP_TAX_MAIN_LIM) return CORP_TAX_MAIN
+  return CORP_TAX_SMALL + (profit - CORP_TAX_MARGIN) / (CORP_TAX_MAIN_LIM - CORP_TAX_MARGIN) * (CORP_TAX_MAIN - CORP_TAX_SMALL)
+}
+
+export function calcCompanyOwnership({
+  annualRentalIncome,
+  otherAnnualIncome,
+  annualMortgageInterest,
+  annualAllowableExpenses,
+  mortgageLoan,
+  spvRatePremiumPct,
+  accountancyCostAnnual,
+  extractionMethod,
+}: {
+  annualRentalIncome:      number
+  otherAnnualIncome:       number
+  annualMortgageInterest:  number
+  annualAllowableExpenses: number
+  mortgageLoan:            number
+  spvRatePremiumPct:       number
+  accountancyCostAnnual:   number
+  extractionMethod:        ExtractionMethod
+}): CompanyResult {
+  const mortgagePremiumAnnual = Math.round(mortgageLoan * spvRatePremiumPct / 100)
+  const spvMortgageInterest   = annualMortgageInterest + mortgagePremiumAnnual
+  const companyTaxableProfit  = Math.max(0,
+    annualRentalIncome - spvMortgageInterest - annualAllowableExpenses - accountancyCostAnnual
+  )
+  const rate    = _corpTaxRate(companyTaxableProfit)
+  const corpTax = Math.round(companyTaxableProfit * rate)
+  const netCompanyProfit = companyTaxableProfit - corpTax
+
+  const BRL = 50_270
+  const HRL = 125_140
+  let dividendTax = 0
+
+  if (extractionMethod === 'dividends') {
+    const taxable = Math.max(0, netCompanyProfit - DIV_ALLOWANCE)
+    const divRate = otherAnnualIncome > HRL ? DIV_ADDITIONAL
+                  : otherAnnualIncome > BRL ? DIV_HIGHER
+                  : DIV_BASIC
+    dividendTax = Math.round(taxable * divRate)
+  } else if (extractionMethod === 'salary') {
+    const PA          = 12_570
+    const totalIncome = otherAnnualIncome + netCompanyProfit
+    const taxRate     = totalIncome > HRL ? 0.45 : totalIncome > BRL ? 0.40 : 0.20
+    const taxableSlice  = Math.max(0, netCompanyProfit - Math.max(0, PA - otherAnnualIncome))
+    const nicBaseBand   = Math.max(0, Math.min(netCompanyProfit, Math.max(0, BRL - Math.max(otherAnnualIncome, PA))))
+    const nicUpperBand  = Math.max(0, netCompanyProfit - Math.max(0, BRL - otherAnnualIncome))
+    dividendTax = Math.round(taxableSlice * taxRate + nicBaseBand * 0.08 + nicUpperBand * 0.02)
+  }
+
+  const afterExtractionAnnual = netCompanyProfit - dividendTax
+  return {
+    companyTaxableProfit,
+    corpTax,
+    corpTaxRate: rate,
+    netCompanyProfit,
+    dividendTax,
+    afterExtractionAnnual,
+    afterExtractionMonthly: Math.round(afterExtractionAnnual / 12),
+    mortgagePremiumAnnual,
+    accountancyCostAnnual,
+    extractionMethod,
+  }
+}
+
+export function calcOwnershipComparison({
+  annualRentalIncome,
+  otherAnnualIncome,
+  annualMortgageInterest,
+  annualAllowableExpenses,
+  mortgageLoan,
+  spvRatePremiumPct,
+  accountancyCostAnnual,
+  extractionMethod,
+}: {
+  annualRentalIncome:      number
+  otherAnnualIncome:       number
+  annualMortgageInterest:  number
+  annualAllowableExpenses: number
+  mortgageLoan:            number
+  spvRatePremiumPct:       number
+  accountancyCostAnnual:   number
+  extractionMethod:        ExtractionMethod
+}): ToggleComparison {
+  const s24 = calcSection24({
+    annualRentalIncome,
+    otherAnnualIncome,
+    annualMortgageInterest,
+    annualAllowableExpenses,
+  })
+
+  const grossTax = Math.max(0, s24.taxableRentalProfit *
+    (s24.taxBand === 'additional' ? 0.45 : s24.taxBand === 'higher' ? 0.40 : 0.20)
+  )
+  const s24CreditAnnual = Math.round(Math.min(grossTax, annualMortgageInterest * 0.20))
+
+  const personal = {
+    ...s24,
+    afterTaxMonthly: Math.round(s24.afterTaxCashIncome / 12),
+    s24CreditAnnual,
+  }
+
+  const company = calcCompanyOwnership({
+    annualRentalIncome,
+    otherAnnualIncome,
+    annualMortgageInterest,
+    annualAllowableExpenses,
+    mortgageLoan,
+    spvRatePremiumPct,
+    accountancyCostAnnual,
+    extractionMethod,
+  })
+
+  const monthlyDiff = company.afterExtractionMonthly - personal.afterTaxMonthly
+  const annualDiff  = monthlyDiff * 12
+  const isBasicRate = s24.taxBand === 'basic'
+
+  let verdict: ToggleComparison['verdict']
+  let verdictReason: string
+
+  if (Math.abs(monthlyDiff) < 30) {
+    verdict = 'neutral'
+    verdictReason = 'Minimal difference — personal ownership is usually simpler to manage'
+  } else if (monthlyDiff > 0) {
+    verdict = 'company'
+    verdictReason = isBasicRate
+      ? `Ltd company shows £${Math.abs(annualDiff).toLocaleString()}/yr benefit, but as a basic-rate taxpayer the admin overhead may not justify the saving`
+      : `Ltd company saves approx £${Math.abs(annualDiff).toLocaleString()}/yr — typically worthwhile for higher/additional rate taxpayers`
+  } else {
+    verdict = 'personal'
+    verdictReason = `Personal ownership is £${Math.abs(annualDiff).toLocaleString()}/yr ahead once the SPV mortgage premium and accountancy costs are factored in`
+  }
+
+  return { personal, company, monthlyDiff, annualDiff, verdict, verdictReason, isBasicRate }
 }
