@@ -32,7 +32,7 @@ const NAV_ITEMS = [
   { icon: '↗', label: 'Market Insights' },
   { icon: '✦', label: 'AI Analysis' },
   { icon: '◫', label: 'Portfolios' },
-  { icon: '◈', label: 'Deal Finder' },
+  { icon: '◈', label: 'Property Finder' },
   { icon: '♡', label: 'Saved Searches' },
   { icon: '⌘', label: 'Mortgages' },
   { icon: '◻', label: 'Reports' },
