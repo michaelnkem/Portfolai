@@ -9,6 +9,7 @@ export const MARKET_DATA = {
     ukAvgYield: 5.8,
     rentalGrowthForecast: 3.5,
     hpiGrowthForecast: 2.5,
+    ukHpi1yr: 1.2,
     londonHpi1yr: -3.3,
     northernCitiesHpi1yr: 4.5,
     sdltSurcharge: 5, // % additional for BTL/2nd home as of Oct 2024
@@ -125,11 +126,11 @@ export const MARKET_DATA = {
       '4bed':  { avgPrice: 580000, avgRent: 2800, avgYield: 5.8 },
     },
     London: {
-      studio: { avgPrice: 320000, avgRent: 1800, avgYield: 6.8 },
-      '1bed':  { avgPrice: 430000, avgRent: 2200, avgYield: 6.1 },
-      '2bed':  { avgPrice: 590000, avgRent: 2850, avgYield: 5.8 },
-      '3bed':  { avgPrice: 780000, avgRent: 3500, avgYield: 5.4 },
-      '4bed':  { avgPrice: 1100000, avgRent: 4800, avgYield: 5.2 },
+      studio: { avgPrice: 310000, avgRent: 1650, avgYield: 6.4 },
+      '1bed':  { avgPrice: 440000, avgRent: 2100, avgYield: 5.7 },
+      '2bed':  { avgPrice: 565000, avgRent: 2750, avgYield: 5.8 },
+      '3bed':  { avgPrice: 695000, avgRent: 3300, avgYield: 5.7 },
+      '4bed':  { avgPrice: 740000, avgRent: 3500, avgYield: 5.7 },
     },
   },
   // ONS HPI index values (base 100 = Jan 2016) — sampled bi-annually
@@ -266,402 +267,408 @@ export function calcProjection(
   return years
 }
 
-// Section 24 calculator
+// ── Section 24 Tax Calculator ─────────────────────────────────────────────────
 export interface Section24Result {
   taxableRentalProfit: number
   taxOnRent: number
   afterTaxCashIncome: number
   taxBand: 'basic' | 'higher' | 'additional'
-  mortgageCreditRelief: number
 }
 
-export function calcSection24(input: {
+export function calcSection24({
+  annualRentalIncome,
+  otherAnnualIncome,
+  annualMortgageInterest,
+  annualAllowableExpenses,
+}: {
   annualRentalIncome: number
   otherAnnualIncome: number
   annualMortgageInterest: number
   annualAllowableExpenses: number
 }): Section24Result {
-  const { annualRentalIncome, otherAnnualIncome, annualMortgageInterest, annualAllowableExpenses } = input
+  // 2026/27 thresholds
+  const PA  = 12_570   // Personal allowance
+  const BRL = 50_270   // Basic rate limit (total income)
+  const HRL = 125_140  // Higher rate limit
 
-  // Under Section 24, mortgage interest is NOT deductible — only a 20% tax credit applies
+  // Under S24: mortgage interest is NOT an allowable expense — only other expenses
   const taxableRentalProfit = Math.max(0, annualRentalIncome - annualAllowableExpenses)
+
+  // Total income for rate-band purposes
   const totalIncome = otherAnnualIncome + taxableRentalProfit
+  const taxableIncome = Math.max(0, totalIncome - PA)
 
-  // 2026/27 income tax thresholds
-  const personalAllowance = 12570
-  const basicRateLimit = 50270
-  const higherRateLimit = 125140
+  // Determine marginal band
+  let taxBand: Section24Result['taxBand']
+  if (totalIncome > HRL) taxBand = 'additional'
+  else if (totalIncome > BRL) taxBand = 'higher'
+  else taxBand = 'basic'
 
-  let taxBand: 'basic' | 'higher' | 'additional'
-  let marginalRate: number
+  // Marginal rate applied to rental profit (simplified — assumes rental sits on top)
+  const rate = taxBand === 'additional' ? 0.45 : taxBand === 'higher' ? 0.40 : 0.20
 
-  if (totalIncome <= basicRateLimit) {
-    taxBand = 'basic'
-    marginalRate = 0.20
-  } else if (totalIncome <= higherRateLimit) {
-    taxBand = 'higher'
-    marginalRate = 0.40
-  } else {
-    taxBand = 'additional'
-    marginalRate = 0.45
-  }
+  const grossTax = Math.max(0, taxableRentalProfit * rate)
+  // S24 credit: 20% of mortgage interest, capped at tax liability
+  const s24Credit = Math.min(grossTax, annualMortgageInterest * 0.20)
+  const taxOnRent = Math.round(Math.max(0, grossTax - s24Credit))
 
-  // Tax on rental profit at marginal rate
-  const taxBeforeCredit = taxableRentalProfit * marginalRate
-
-  // Section 24 mortgage credit — always 20% of interest regardless of tax band
-  const mortgageCreditRelief = annualMortgageInterest * 0.20
-
-  const taxOnRent = Math.max(0, Math.round(taxBeforeCredit - mortgageCreditRelief))
-
-  // After-tax cash income = net rental income minus tax
-  const netRentalIncome = annualRentalIncome - annualAllowableExpenses - annualMortgageInterest
-  const afterTaxCashIncome = Math.round(netRentalIncome - taxOnRent)
+  const afterTaxCashIncome = Math.round(
+    annualRentalIncome - annualAllowableExpenses - annualMortgageInterest - taxOnRent
+  )
 
   return {
     taxableRentalProfit: Math.round(taxableRentalProfit),
     taxOnRent,
     afterTaxCashIncome,
     taxBand,
-    mortgageCreditRelief: Math.round(mortgageCreditRelief),
   }
 }
 
-// ── INVESTMENT FIT SCORING ENGINE ─────────────────────────────────────────────
-// Used by Deal Finder to rank live listings against the user's investment profile
-// Built from favourited properties — no manual input required
-//
-// Score breakdown (total 100 points):
-//   Return efficiency    30pts — net yield vs benchmark
-//   Entry price efficiency 25pts — yield per £ invested vs comparable
-//   Strategy match       20pts — type, beds, tenure alignment
-//   Location opportunity 15pts — city demand, supply gap, growth trajectory
-//   Risk & compliance    10pts — EPC, leasehold risk, flood risk
-//
-// Score labels:
-//   90–100  Exceptional fit
-//   80–89   Strong fit
-//   70–79   Good fit
-//   60–69   Speculative fit
-//   0–59    Weak fit
+// ── Ltd Company / SPV Ownership Calculator ───────────────────────────────────
+const CORP_TAX_SMALL    = 0.19
+const CORP_TAX_MAIN     = 0.25
+const CORP_TAX_MARGIN   = 50_000
+const CORP_TAX_MAIN_LIM = 250_000
+const DIV_ALLOWANCE     = 500
+const DIV_BASIC         = 0.0875
+const DIV_HIGHER        = 0.3375
+const DIV_ADDITIONAL    = 0.3935
 
-export interface InvestmentFitInput {
-  // The property being scored
-  askingPrice: number          // current asking/listing price
-  estimatedNetYield: number    // % net yield at asking price
-  estimatedGrossYield: number  // % gross yield at asking price
-  propertyType: string         // e.g. 'Terraced', 'Semi-Detached', 'Flat'
-  bedrooms: number
-  tenure: string               // 'Freehold' | 'Leasehold'
-  epcRating: string            // 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G'
-  cityName: string             // must match a key in MARKET_DATA.cities
-  hasFloodRisk?: boolean
-  capitalGrowth1yr?: number    // override city default if available
+export type ExtractionMethod = 'dividends' | 'salary' | 'retain'
+
+export interface CompanyResult {
+  companyTaxableProfit:   number
+  corpTax:                number
+  corpTaxRate:            number
+  netCompanyProfit:       number
+  dividendTax:            number
+  afterExtractionAnnual:  number
+  afterExtractionMonthly: number
+  mortgagePremiumAnnual:  number
+  accountancyCostAnnual:  number
+  extractionMethod:       ExtractionMethod
 }
 
-export interface UserBenchmark {
-  // Derived from the user's favourited properties
-  // Pass averages/ranges across all favourited properties
-  avgNetYield: number          // average net yield across favourites
-  avgGrossYield: number        // average gross yield across favourites
-  avgPrice: number             // average price paid across favourites
-  preferredTypes: string[]     // e.g. ['Terraced', 'Semi-Detached']
-  preferredBeds: number[]      // e.g. [3, 4]
-  preferredTenure: string      // 'Freehold' | 'Leasehold' | 'Any'
-  minNetYield: number          // minimum acceptable net yield
-  maxPrice: number             // maximum acceptable price
-  minPrice: number             // minimum price considered
+export interface ToggleComparison {
+  personal:      Section24Result & { afterTaxMonthly: number; s24CreditAnnual: number }
+  company:       CompanyResult
+  monthlyDiff:   number
+  annualDiff:    number
+  verdict:       'personal' | 'company' | 'neutral'
+  verdictReason: string
+  isBasicRate:   boolean
 }
 
-export interface InvestmentFitResult {
-  score: number                        // 0–100
-  label: string                        // 'Exceptional fit' | 'Strong fit' etc.
-  breakdown: {
-    returnEfficiency: number           // 0–30
-    entryPriceEfficiency: number       // 0–25
-    strategyMatch: number              // 0–20
-    locationOpportunity: number        // 0–15
-    riskCompliance: number             // 0–10
-  }
-  badge: string                        // 'Top Match' | 'High Yield' | 'Strong ROI' | 'Lower Entry' | 'Good Fit'
-  badgeColour: 'green' | 'blue' | 'gold' | 'grey'
-  primaryStrength: string              // one-line reason e.g. "9.1% yield — 1.5% above your benchmark"
+function _corpTaxRate(profit: number): number {
+  if (profit <= CORP_TAX_MARGIN)   return CORP_TAX_SMALL
+  if (profit >= CORP_TAX_MAIN_LIM) return CORP_TAX_MAIN
+  return CORP_TAX_SMALL + (profit - CORP_TAX_MARGIN) / (CORP_TAX_MAIN_LIM - CORP_TAX_MARGIN) * (CORP_TAX_MAIN - CORP_TAX_SMALL)
 }
 
-export function calcInvestmentFit(
-  property: InvestmentFitInput,
-  benchmark: UserBenchmark,
-): InvestmentFitResult {
-
-  const cityData = MARKET_DATA.cities[property.cityName as keyof typeof MARKET_DATA.cities]
-    || null
-
-  // ── 1. RETURN EFFICIENCY (30 points) ──────────────────────────────────────
-  // Compares the property's net yield to the user's benchmark
-  // At benchmark = 20pts. Each 1% above = +5pts up to 30pts. Below = proportional reduction.
-  let returnEfficiency = 0
-  if (benchmark.avgNetYield > 0 && property.estimatedNetYield > 0) {
-    const yieldRatio = property.estimatedNetYield / benchmark.avgNetYield
-    if (yieldRatio >= 1.3)       returnEfficiency = 30  // 30%+ above benchmark
-    else if (yieldRatio >= 1.1)  returnEfficiency = 27  // 10–30% above
-    else if (yieldRatio >= 1.0)  returnEfficiency = 22  // at benchmark
-    else if (yieldRatio >= 0.9)  returnEfficiency = 17  // 0–10% below
-    else if (yieldRatio >= 0.8)  returnEfficiency = 12  // 10–20% below
-    else if (yieldRatio >= 0.7)  returnEfficiency = 7   // 20–30% below
-    else                         returnEfficiency = 3   // >30% below
-
-    // Bonus: absolute yield is high even if benchmark is high
-    if (property.estimatedNetYield >= 8.0) returnEfficiency = Math.min(30, returnEfficiency + 3)
-    if (property.estimatedNetYield >= 6.0 && returnEfficiency < 10) returnEfficiency = 10
-  }
-
-  // ── 2. ENTRY PRICE EFFICIENCY (25 points) ────────────────────────────────
-  // How much yield per £ invested vs the user's typical entry price
-  // Lower price for same yield = better capital efficiency
-  let entryPriceEfficiency = 0
-  if (benchmark.avgPrice > 0 && property.askingPrice > 0) {
-    // Capital efficiency: yield per £100k invested
-    const propEfficiency  = (property.estimatedNetYield / property.askingPrice) * 100000
-    const benchEfficiency = (benchmark.avgNetYield / benchmark.avgPrice) * 100000
-
-    if (benchEfficiency > 0) {
-      const efficiencyRatio = propEfficiency / benchEfficiency
-      if (efficiencyRatio >= 1.4)      entryPriceEfficiency = 25
-      else if (efficiencyRatio >= 1.2) entryPriceEfficiency = 22
-      else if (efficiencyRatio >= 1.0) entryPriceEfficiency = 18
-      else if (efficiencyRatio >= 0.85) entryPriceEfficiency = 13
-      else if (efficiencyRatio >= 0.7) entryPriceEfficiency = 8
-      else                             entryPriceEfficiency = 4
-    }
-
-    // Within budget range bonus
-    if (property.askingPrice >= benchmark.minPrice && property.askingPrice <= benchmark.maxPrice) {
-      entryPriceEfficiency = Math.min(25, entryPriceEfficiency + 2)
-    }
-
-    // Significantly below budget = capital efficiency bonus
-    if (property.askingPrice < benchmark.avgPrice * 0.7) {
-      entryPriceEfficiency = Math.min(25, entryPriceEfficiency + 3)
-    }
-  }
-
-  // ── 3. STRATEGY MATCH (20 points) ────────────────────────────────────────
-  // How well the property type, bedrooms and tenure match the user's preferences
-  let strategyMatch = 0
-
-  // Property type match (8 pts)
-  const propTypeLower = property.propertyType.toLowerCase()
-  const typeMatch = benchmark.preferredTypes.some(t =>
-    propTypeLower.includes(t.toLowerCase()) ||
-    t.toLowerCase().includes(propTypeLower.split('-')[0])
+export function calcCompanyOwnership({
+  annualRentalIncome,
+  otherAnnualIncome,
+  annualMortgageInterest,
+  annualAllowableExpenses,
+  mortgageLoan,
+  spvRatePremiumPct,
+  accountancyCostAnnual,
+  extractionMethod,
+}: {
+  annualRentalIncome:      number
+  otherAnnualIncome:       number
+  annualMortgageInterest:  number
+  annualAllowableExpenses: number
+  mortgageLoan:            number
+  spvRatePremiumPct:       number
+  accountancyCostAnnual:   number
+  extractionMethod:        ExtractionMethod
+}): CompanyResult {
+  const mortgagePremiumAnnual = Math.round(mortgageLoan * spvRatePremiumPct / 100)
+  const spvMortgageInterest   = annualMortgageInterest + mortgagePremiumAnnual
+  const companyTaxableProfit  = Math.max(0,
+    annualRentalIncome - spvMortgageInterest - annualAllowableExpenses - accountancyCostAnnual
   )
-  strategyMatch += typeMatch ? 8 : 3
+  const rate    = _corpTaxRate(companyTaxableProfit)
+  const corpTax = Math.round(companyTaxableProfit * rate)
+  const netCompanyProfit = companyTaxableProfit - corpTax
 
-  // Bedroom match (7 pts)
-  const bedMatch = benchmark.preferredBeds.includes(property.bedrooms)
-  const bedClose = benchmark.preferredBeds.some(b => Math.abs(b - property.bedrooms) === 1)
-  strategyMatch += bedMatch ? 7 : bedClose ? 4 : 1
+  const BRL = 50_270
+  const HRL = 125_140
+  let dividendTax = 0
 
-  // Tenure match (5 pts)
-  const tenureLower = property.tenure.toLowerCase()
-  if (benchmark.preferredTenure === 'Any') {
-    strategyMatch += 4
-  } else if (benchmark.preferredTenure.toLowerCase() === tenureLower) {
-    strategyMatch += 5
-  } else {
-    strategyMatch += 1
+  if (extractionMethod === 'dividends') {
+    const taxable = Math.max(0, netCompanyProfit - DIV_ALLOWANCE)
+    const divRate = otherAnnualIncome > HRL ? DIV_ADDITIONAL
+                  : otherAnnualIncome > BRL ? DIV_HIGHER
+                  : DIV_BASIC
+    dividendTax = Math.round(taxable * divRate)
+  } else if (extractionMethod === 'salary') {
+    const PA          = 12_570
+    const totalIncome = otherAnnualIncome + netCompanyProfit
+    const taxRate     = totalIncome > HRL ? 0.45 : totalIncome > BRL ? 0.40 : 0.20
+    const taxableSlice  = Math.max(0, netCompanyProfit - Math.max(0, PA - otherAnnualIncome))
+    const nicBaseBand   = Math.max(0, Math.min(netCompanyProfit, Math.max(0, BRL - Math.max(otherAnnualIncome, PA))))
+    const nicUpperBand  = Math.max(0, netCompanyProfit - Math.max(0, BRL - otherAnnualIncome))
+    dividendTax = Math.round(taxableSlice * taxRate + nicBaseBand * 0.08 + nicUpperBand * 0.02)
   }
 
-  // ── 4. LOCATION OPPORTUNITY (15 points) ──────────────────────────────────
-  // City-level demand, supply gap, capital growth trajectory
-  let locationOpportunity = 0
-  if (cityData) {
-    // Demand score (5 pts)
-    if (cityData.demandScore >= 90)      locationOpportunity += 5
-    else if (cityData.demandScore >= 80) locationOpportunity += 4
-    else if (cityData.demandScore >= 70) locationOpportunity += 3
-    else                                 locationOpportunity += 1
-
-    // Supply gap — lower supplyScore = higher gap (3 pts)
-    const supplyGap = 100 - cityData.supplyScore
-    if (supplyGap >= 70)      locationOpportunity += 3
-    else if (supplyGap >= 55) locationOpportunity += 2
-    else                      locationOpportunity += 1
-
-    // Capital growth trajectory (4 pts)
-    const growth = property.capitalGrowth1yr ?? cityData.capitalGrowth1yr
-    if (growth >= 4.0)       locationOpportunity += 4
-    else if (growth >= 2.5)  locationOpportunity += 3
-    else if (growth >= 1.0)  locationOpportunity += 2
-    else if (growth >= 0)    locationOpportunity += 1
-    // negative growth = 0pts
-
-    // Regeneration bonus (3 pts)
-    if (cityData.regenerationScore >= 85)      locationOpportunity += 3
-    else if (cityData.regenerationScore >= 70) locationOpportunity += 2
-    else                                       locationOpportunity += 1
-  } else {
-    locationOpportunity = 6 // neutral if city unknown
-  }
-
-  // ── 5. RISK & COMPLIANCE (10 points) ─────────────────────────────────────
-  // EPC, leasehold risk, flood risk
-  let riskCompliance = 10 // start at full marks, deduct for risk factors
-
-  // EPC compliance
-  const epc = property.epcRating?.toUpperCase()?.charAt(0) || 'D'
-  if (epc === 'G')      riskCompliance -= 5
-  else if (epc === 'F') riskCompliance -= 4
-  else if (epc === 'E') riskCompliance -= 2
-  else if (epc === 'D') riskCompliance -= 1
-  // C, B, A = no deduction (compliant with 2028 proposed rules)
-
-  // Leasehold risk
-  if (property.tenure.toLowerCase().includes('leasehold')) riskCompliance -= 2
-
-  // Flood risk
-  if (property.hasFloodRisk) riskCompliance -= 3
-
-  riskCompliance = Math.max(0, riskCompliance)
-
-  // ── TOTAL SCORE ───────────────────────────────────────────────────────────
-  const rawScore = returnEfficiency + entryPriceEfficiency + strategyMatch + locationOpportunity + riskCompliance
-  const score = Math.min(100, Math.max(0, Math.round(rawScore)))
-
-  // ── LABEL ─────────────────────────────────────────────────────────────────
-  let label: string
-  if (score >= 90)      label = 'Exceptional fit'
-  else if (score >= 80) label = 'Strong fit'
-  else if (score >= 70) label = 'Good fit'
-  else if (score >= 60) label = 'Speculative fit'
-  else                  label = 'Weak fit'
-
-  // ── BADGE — based on primary strength ────────────────────────────────────
-  // Determine what makes this property stand out most
-  let badge: string
-  let badgeColour: 'green' | 'blue' | 'gold' | 'grey'
-  let primaryStrength: string
-
-  if (score >= 90) {
-    badge = 'Top Match'
-    badgeColour = 'green'
-    primaryStrength = `${score}% investment fit — matches your strategy across all criteria`
-  } else if (returnEfficiency >= 25 && property.estimatedNetYield >= benchmark.avgNetYield * 1.15) {
-    // Standout yield
-    const diff = (property.estimatedNetYield - benchmark.avgNetYield).toFixed(1)
-    badge = 'High Yield'
-    badgeColour = 'green'
-    primaryStrength = `${property.estimatedNetYield}% net yield — ${diff}% above your benchmark`
-  } else if (entryPriceEfficiency >= 22 && property.askingPrice < benchmark.avgPrice * 0.75) {
-    // Lower entry cost
-    const saving = Math.round((benchmark.avgPrice - property.askingPrice) / 1000)
-    badge = 'Lower Entry'
-    badgeColour = 'blue'
-    primaryStrength = `£${saving}k lower entry cost than your typical investment`
-  } else if (locationOpportunity >= 13 && cityData) {
-    // Strong location
-    const totalRoi = (property.estimatedNetYield + (cityData.capitalGrowth1yr || 0)).toFixed(1)
-    badge = 'Strong ROI'
-    badgeColour = 'gold'
-    primaryStrength = `${totalRoi}% total ROI — strong ${property.cityName} market fundamentals`
-  } else if (score >= 70) {
-    badge = 'Good Fit'
-    badgeColour = 'grey'
-    primaryStrength = `Solid match across ${score >= 75 ? 'most' : 'several'} of your investment criteria`
-  } else {
-    badge = 'Speculative'
-    badgeColour = 'grey'
-    primaryStrength = 'Partial match — review carefully before proceeding'
-  }
-
+  const afterExtractionAnnual = netCompanyProfit - dividendTax
   return {
-    score,
-    label,
-    breakdown: {
-      returnEfficiency,
-      entryPriceEfficiency,
-      strategyMatch,
-      locationOpportunity,
-      riskCompliance,
-    },
-    badge,
-    badgeColour,
-    primaryStrength,
+    companyTaxableProfit,
+    corpTax,
+    corpTaxRate: rate,
+    netCompanyProfit,
+    dividendTax,
+    afterExtractionAnnual,
+    afterExtractionMonthly: Math.round(afterExtractionAnnual / 12),
+    mortgagePremiumAnnual,
+    accountancyCostAnnual,
+    extractionMethod,
   }
 }
 
-// ── DERIVE USER BENCHMARK FROM FAVOURITES ─────────────────────────────────────
-// Helper to build a UserBenchmark from an array of favourited property records
-// Call this in Deal Finder before scoring listings
-// Each favourite should be a property data object from the /api/property response
+export function calcOwnershipComparison({
+  annualRentalIncome,
+  otherAnnualIncome,
+  annualMortgageInterest,
+  annualAllowableExpenses,
+  mortgageLoan,
+  spvRatePremiumPct,
+  accountancyCostAnnual,
+  extractionMethod,
+}: {
+  annualRentalIncome:      number
+  otherAnnualIncome:       number
+  annualMortgageInterest:  number
+  annualAllowableExpenses: number
+  mortgageLoan:            number
+  spvRatePremiumPct:       number
+  accountancyCostAnnual:   number
+  extractionMethod:        ExtractionMethod
+}): ToggleComparison {
+  const s24 = calcSection24({
+    annualRentalIncome,
+    otherAnnualIncome,
+    annualMortgageInterest,
+    annualAllowableExpenses,
+  })
 
-export function deriveBenchmarkFromFavourites(
-  favourites: Array<Record<string, unknown>>
-): UserBenchmark | null {
-  if (!favourites || favourites.length === 0) return null
+  const grossTax = Math.max(0, s24.taxableRentalProfit *
+    (s24.taxBand === 'additional' ? 0.45 : s24.taxBand === 'higher' ? 0.40 : 0.20)
+  )
+  const s24CreditAnnual = Math.round(Math.min(grossTax, annualMortgageInterest * 0.20))
 
-  const prices: number[] = []
-  const netYields: number[] = []
-  const grossYields: number[] = []
-  const types: string[] = []
-  const beds: number[] = []
-  const tenures: string[] = []
-
-  for (const fav of favourites) {
-    const prop     = fav.property     as Record<string, unknown> | undefined
-    const enriched = fav.enriched     as Record<string, unknown> | undefined
-    if (!prop) continue
-
-    const price = Number(prop.last_sold_price || 0)
-    if (price > 0) prices.push(price)
-
-    const netYield = Number(enriched?.netYield || 0)
-    if (netYield > 0) netYields.push(netYield)
-
-    const grossYield = Number(enriched?.grossYield || 0)
-    if (grossYield > 0) grossYields.push(grossYield)
-
-    const type = String(prop.property_type || '').trim()
-    if (type && !types.includes(type)) types.push(type)
-
-    const bedCount = Number(prop.bedrooms || 0)
-    if (bedCount > 0 && !beds.includes(bedCount)) beds.push(bedCount)
-
-    const tenure = String(prop.tenure || '').trim()
-    if (tenure) tenures.push(tenure)
+  const personal = {
+    ...s24,
+    afterTaxMonthly: Math.round(s24.afterTaxCashIncome / 12),
+    s24CreditAnnual,
   }
 
-  if (prices.length === 0) return null
+  const company = calcCompanyOwnership({
+    annualRentalIncome,
+    otherAnnualIncome,
+    annualMortgageInterest,
+    annualAllowableExpenses,
+    mortgageLoan,
+    spvRatePremiumPct,
+    accountancyCostAnnual,
+    extractionMethod,
+  })
 
-  const avg = (arr: number[]) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
+  const monthlyDiff = company.afterExtractionMonthly - personal.afterTaxMonthly
+  const annualDiff  = monthlyDiff * 12
+  const isBasicRate = s24.taxBand === 'basic'
 
-  const avgPrice    = Math.round(avg(prices))
-  const avgNetYield = parseFloat(avg(netYields).toFixed(2))
-  const avgGrossYield = parseFloat(avg(grossYields).toFixed(2))
+  let verdict: ToggleComparison['verdict']
+  let verdictReason: string
 
-  // Preferred tenure — use most common
-  const tenureCount: Record<string, number> = {}
-  for (const t of tenures) tenureCount[t] = (tenureCount[t] || 0) + 1
-  const preferredTenure = tenures.length > 0
-    ? Object.entries(tenureCount).sort((a, b) => b[1] - a[1])[0][0]
-    : 'Any'
+  if (Math.abs(monthlyDiff) < 30) {
+    verdict = 'neutral'
+    verdictReason = 'Minimal difference — personal ownership is usually simpler to manage'
+  } else if (monthlyDiff > 0) {
+    verdict = 'company'
+    verdictReason = isBasicRate
+      ? `Ltd company shows £${Math.abs(annualDiff).toLocaleString()}/yr benefit, but as a basic-rate taxpayer the admin overhead may not justify the saving`
+      : `Ltd company saves approx £${Math.abs(annualDiff).toLocaleString()}/yr — typically worthwhile for higher/additional rate taxpayers`
+  } else {
+    verdict = 'personal'
+    verdictReason = `Personal ownership is £${Math.abs(annualDiff).toLocaleString()}/yr ahead once the SPV mortgage premium and accountancy costs are factored in`
+  }
 
-  // Price range — ±40% of average to allow cross-city flexibility
-  const minPrice = Math.round(avgPrice * 0.6)
-  const maxPrice = Math.round(avgPrice * 1.4)
+  return { personal, company, monthlyDiff, annualDiff, verdict, verdictReason, isBasicRate }
+}
 
-  // Minimum net yield — 85% of average (don't be too strict)
-  const minNetYield = parseFloat((avgNetYield * 0.85).toFixed(2))
+// ── Investment Signals Calculator ─────────────────────────────────────────────
+// Maps UK postcode area prefix → nearest city in MARKET_DATA
+const POSTCODE_CITY: Record<string, string> = {
+  // London inner
+  'E':  'London', 'EC': 'London', 'N':  'London', 'NW': 'London',
+  'SE': 'London', 'SW': 'London', 'W':  'London', 'WC': 'London',
+  // London outer
+  'BR': 'London', 'CR': 'London', 'DA': 'London', 'EN': 'London',
+  'HA': 'London', 'IG': 'London', 'KT': 'London', 'RM': 'London',
+  'SM': 'London', 'TN': 'London', 'TW': 'London', 'UB': 'London',
+  'WD': 'London',
+  // Manchester / Greater Manchester
+  'M':  'Manchester', 'SK': 'Manchester', 'OL': 'Manchester',
+  'BL': 'Manchester', 'WN': 'Manchester', 'WA': 'Manchester',
+  // Liverpool / Merseyside
+  'L':  'Liverpool', 'CH': 'Liverpool', 'PR': 'Liverpool',
+  // Leeds / West Yorkshire
+  'LS': 'Leeds', 'BD': 'Leeds', 'HX': 'Leeds', 'HG': 'Leeds', 'WF': 'Leeds',
+  // Sheffield / South Yorkshire
+  'S':  'Sheffield', 'DN': 'Sheffield',
+  // Birmingham / West Midlands
+  'B':  'Birmingham', 'CV': 'Birmingham', 'WS': 'Birmingham',
+  'WV': 'Birmingham', 'DY': 'Birmingham',
+  // Nottingham / East Midlands
+  'NG': 'Nottingham', 'DE': 'Nottingham', 'LE': 'Nottingham',
+  // Bristol / South West
+  'BS': 'Bristol', 'BA': 'Bristol', 'GL': 'Bristol', 'SN': 'Bristol',
+}
+
+// Per postcode-area score adjustments relative to city baseline (d=demand s=supplyGap r=regen i=infra)
+const OUTCODE_ADJ: Record<string, { d: number; s: number; r: number; i: number; area: string }> = {
+  // Inner London — above city avg
+  'EC': { d:  9, s: 12, r:  4, i:  9, area: 'East Central London'  },
+  'WC': { d:  8, s: 11, r:  3, i:  8, area: 'West Central London'  },
+  'W':  { d:  5, s:  4, r:  2, i:  6, area: 'West London'          },
+  'SW': { d:  4, s:  3, r:  2, i:  4, area: 'South West London'    },
+  'NW': { d:  3, s:  5, r:  5, i:  3, area: 'North West London'    },
+  'N':  { d:  2, s:  4, r:  4, i:  2, area: 'North London'         },
+  'E':  { d:  5, s:  8, r: 13, i:  3, area: 'East London'          },
+  'SE': { d:  1, s:  3, r:  7, i:  1, area: 'South East London'    },
+  // Outer London — below city avg
+  'EN': { d:  -8, s:  -6, r:  -4, i:  -7, area: 'Enfield'          },
+  'IG': { d: -10, s:  -8, r:  -6, i:  -9, area: 'Ilford/Redbridge' },
+  'RM': { d: -12, s:  -7, r:  -5, i: -10, area: 'Romford'          },
+  'DA': { d: -11, s:  -6, r:   3, i:  -8, area: 'Bexley/Dartford'  },
+  'CR': { d:  -9, s:  -5, r:  -3, i:  -6, area: 'Croydon'          },
+  'BR': { d: -10, s:  -4, r:  -4, i:  -7, area: 'Bromley'          },
+  'TW': { d:  -7, s:  -3, r:  -2, i:  -5, area: 'Twickenham'       },
+  'KT': { d:  -6, s:  -2, r:  -2, i:  -4, area: 'Kingston'         },
+  'HA': { d:  -9, s:  -6, r:  -3, i:  -6, area: 'Harrow'           },
+  'UB': { d:  -8, s:  -5, r:   2, i:  -5, area: 'Hillingdon'       },
+  'WD': { d: -11, s:  -7, r:  -5, i:  -8, area: 'Watford'          },
+  'SM': { d:  -8, s:  -4, r:  -3, i:  -6, area: 'Sutton/Merton'    },
+  // Greater Manchester periphery
+  'SK': { d:  -5, s:  -3, r:  -4, i:  -5, area: 'Stockport'        },
+  'OL': { d:  -8, s:  -4, r:  -5, i:  -7, area: 'Oldham'           },
+  'BL': { d:  -9, s:  -5, r:  -6, i:  -8, area: 'Bolton'           },
+  'WN': { d: -10, s:  -6, r:  -7, i:  -9, area: 'Wigan'            },
+  'WA': { d:  -7, s:  -4, r:  -5, i:  -6, area: 'Warrington'       },
+  // West Yorkshire periphery
+  'BD': { d:  -6, s:  -3, r:  -4, i:  -6, area: 'Bradford'         },
+  'HX': { d:  -8, s:  -5, r:  -6, i:  -8, area: 'Halifax'          },
+  'HG': { d:  -5, s:  -4, r:  -5, i:  -6, area: 'Harrogate'        },
+  'WF': { d:  -6, s:  -4, r:  -5, i:  -7, area: 'Wakefield'        },
+  // South Yorkshire periphery
+  'DN': { d:  -5, s:  -3, r:  -4, i:  -5, area: 'Doncaster'        },
+  // West Midlands periphery
+  'CV': { d:  -5, s:  -3, r:  -4, i:  -5, area: 'Coventry'         },
+  'WS': { d:  -6, s:  -4, r:  -5, i:  -6, area: 'Walsall'          },
+  'WV': { d:  -7, s:  -5, r:  -6, i:  -7, area: 'Wolverhampton'    },
+  'DY': { d:  -6, s:  -4, r:  -4, i:  -6, area: 'Dudley'           },
+  // East Midlands periphery
+  'DE': { d:  -4, s:  -2, r:  -3, i:  -4, area: 'Derby'            },
+  'LE': { d:  -3, s:  -2, r:  -2, i:  -3, area: 'Leicester'        },
+  // South West periphery
+  'BA': { d:  -5, s:  -3, r:  -4, i:  -5, area: 'Bath'             },
+  'GL': { d:  -7, s:  -5, r:  -6, i:  -7, area: 'Gloucester'       },
+  'SN': { d:  -8, s:  -6, r:  -7, i:  -8, area: 'Swindon'          },
+}
+
+function _postcodeArea(postcode: string): string {
+  const outcode = postcode.trim().toUpperCase().split(/\s+/)[0] ?? ''
+  return outcode.replace(/\d.*$/, '') // strip from first digit onward
+}
+
+function _clamp(v: number): number {
+  return Math.max(0, Math.min(100, Math.round(v)))
+}
+
+function _signalLabel(score: number): string {
+  if (score >= 90) return 'Very Strong'
+  if (score >= 75) return 'Strong'
+  if (score >= 60) return 'Good'
+  if (score >= 45) return 'Moderate'
+  return 'Weak'
+}
+
+export interface InvestmentSignalInput {
+  postcode: string
+  cityName: string
+}
+
+export interface SignalScore {
+  score: number
+  label: string
+  source: string
+  confidence: number
+}
+
+export interface InvestmentSignals {
+  demand:         SignalScore
+  supplyGap:      SignalScore
+  regeneration:   SignalScore
+  infrastructure: SignalScore
+  sourceLevel:    'outcode' | 'city' | 'national'
+  areaDescription: string
+}
+
+export function calculateInvestmentSignals({ postcode, cityName }: InvestmentSignalInput): InvestmentSignals {
+  const prefix   = _postcodeArea(postcode)
+  const outAdj   = OUTCODE_ADJ[prefix]
+  const mappedCity = POSTCODE_CITY[prefix] || cityName
+  const baseCity = MARKET_DATA.cities[mappedCity as keyof typeof MARKET_DATA.cities]
+    || MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities]
+
+  const hasOutcodeAdj = !!outAdj && !!prefix
+  const sourceLevel   = hasOutcodeAdj ? 'outcode' : (baseCity ? 'city' : 'national')
+  const confidence    = hasOutcodeAdj ? 85 : baseCity ? 70 : 50
+
+  // Base scores from city data (supply gap = inverted supply score)
+  const baseDemand   = baseCity?.demandScore         ?? 75
+  const baseSupplyGap = baseCity ? (100 - baseCity.supplyScore) : 62
+  const baseRegen    = baseCity?.regenerationScore   ?? 65
+  const baseInfra    = baseCity?.infrastructureScore ?? 70
+
+  const demandScore   = _clamp(baseDemand    + (outAdj?.d ?? 0))
+  const supplyScore   = _clamp(baseSupplyGap + (outAdj?.s ?? 0))
+  const regenScore    = _clamp(baseRegen     + (outAdj?.r ?? 0))
+  const infraScore    = _clamp(baseInfra     + (outAdj?.i ?? 0))
+
+  const areaName = outAdj?.area ?? mappedCity ?? cityName
+  const outcode  = postcode.trim().toUpperCase().split(/\s+/)[0] ?? ''
+  const sourceDesc = hasOutcodeAdj
+    ? `Local area data · ${areaName}`
+    : `City-level data · ${mappedCity || cityName}`
+
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('[investment-signals]', {
+      postcode, prefix, outcode, mappedCity, sourceLevel, areaName,
+      demandScore, supplyGapScore: supplyScore, regenScore, infraScore,
+    })
+  }
+
+  const make = (score: number): SignalScore => ({
+    score,
+    label: _signalLabel(score),
+    source: sourceDesc,
+    confidence,
+  })
+
+  const areaDescription = hasOutcodeAdj
+    ? `${outcode}${areaName !== outcode ? `, ${areaName}` : ''}${cityName ? `, ${cityName}` : ''}`
+    : (cityName || 'UK Average')
 
   return {
-    avgNetYield,
-    avgGrossYield,
-    avgPrice,
-    preferredTypes: types.length > 0 ? types : ['Terraced', 'Semi-Detached'],
-    preferredBeds: beds.length > 0 ? beds.sort((a, b) => a - b) : [2, 3],
-    preferredTenure,
-    minNetYield,
-    maxPrice,
-    minPrice,
+    demand:         make(demandScore),
+    supplyGap:      make(supplyScore),
+    regeneration:   make(regenScore),
+    infrastructure: make(infraScore),
+    sourceLevel,
+    areaDescription,
   }
 }
