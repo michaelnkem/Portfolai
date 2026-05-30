@@ -173,6 +173,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
   const cityName = data.cityName    as string
   const cityData = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
 
+  // Live listing context — injected by DealFinder when opening from search results
+  const liveListingCtx = data._liveListingContext as Record<string, unknown> | null | undefined
+  const liveAskingPrice = liveListingCtx?.sourceContext === 'homedata_live_listing'
+    ? (Number(liveListingCtx.liveListingAskingPrice ?? 0) || 0)
+    : 0
+  const isLiveListing = liveAskingPrice > 0
+
   // propType needed before estimatedCurrentValue recalc
   const propType = String(p?.property_type ?? '')
 
@@ -240,17 +247,20 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
     return Math.round((anchor / originalArea * corrected) / 1000) * 1000
   })()
 
-  // Yield price basis: estimated current value first, last sold price as fallback
-  // Using last_sold_price as primary denominator inflates yield for old transactions
+  // Yield price basis: asking price (live listing) > estimated current value > last sold price
   const _soldP = Number(p?.last_sold_price ?? 0)
   const yieldPrice =
-    estimatedCurrentValue > 0
+    liveAskingPrice > 0
+      ? liveAskingPrice
+      : estimatedCurrentValue > 0
       ? estimatedCurrentValue
       : _soldP > 0
       ? _soldP
       : 0
-  const yieldPriceSource: 'estimated_current_value' | 'last_sold_price' | null =
-    estimatedCurrentValue > 0
+  const yieldPriceSource: 'asking_price' | 'estimated_current_value' | 'last_sold_price' | null =
+    liveAskingPrice > 0
+      ? 'asking_price'
+      : estimatedCurrentValue > 0
       ? 'estimated_current_value'
       : _soldP > 0
       ? 'last_sold_price'
@@ -642,24 +652,36 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               </div>
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-4 mb-6">
-                  {/* Est. Current Value */}
+                  {/* Est. Current Value / Asking Price */}
                   <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Estimated Current Value</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">
+                      {isLiveListing ? 'Asking Price' : 'Estimated Current Value'}
+                    </p>
                     <p className="font-bold text-[38px] leading-none text-[#047857] mb-2"
                       style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
-                      {estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
+                      {isLiveListing
+                        ? `£${liveAskingPrice.toLocaleString()}`
+                        : estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
                     </p>
                     <div className="flex items-center gap-2 flex-wrap">
-                      {confidenceScore && (
-                        <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
-                          {confidenceScore}% confidence
-                        </span>
+                      {isLiveListing ? (
+                        estimatedCurrentValue > 0 && (
+                          <p className="text-xs text-[#6B7280]">Est. Market Value: £{estimatedCurrentValue.toLocaleString()}</p>
+                        )
+                      ) : (
+                        <>
+                          {confidenceScore && (
+                            <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
+                              {confidenceScore}% confidence
+                            </span>
+                          )}
+                          {bedroomsOverride !== null ? (
+                            <p className="text-xs text-[#047857] font-medium">Recalculated using corrected bedroom count</p>
+                          ) : price && p?.last_sold_date ? (
+                            <p className="text-xs text-[#6B7280]">Est. from {String(p.last_sold_date).slice(0, 4)} sale price</p>
+                          ) : null}
+                        </>
                       )}
-                      {bedroomsOverride !== null ? (
-                        <p className="text-xs text-[#047857] font-medium">Recalculated using corrected bedroom count</p>
-                      ) : price && p?.last_sold_date ? (
-                        <p className="text-xs text-[#6B7280]">Est. from {String(p.last_sold_date).slice(0, 4)} sale price</p>
-                      ) : null}
                     </div>
                   </div>
 
