@@ -7,9 +7,9 @@ import { MarketIntel } from '@/components/property/MarketIntel'
 import { Portfolio } from '@/components/property/Portfolio'
 import { ROICalculator } from '@/components/property/ROICalculator'
 import { MARKET_DATA, calcNetMonthlyIncome } from '@/lib/market-data'
-import { PropertyFinder } from '@/components/property/PropertyFinder'
+import { DealFinder } from '@/components/property/DealFinder'
 
-export type Tab = 'search' | 'market' | 'portfolio' | 'calculator' | 'favourites' | 'alerts' | 'property-finder' | 'property-analysis'
+export type Tab = 'search' | 'market' | 'portfolio' | 'calculator' | 'favourites' | 'alerts' | 'deal-finder' | 'property-analysis'
 
 const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
 
@@ -221,7 +221,7 @@ export default function Home() {
     { icon: '★',  label: 'Favourites',        id: 'favourites'        },
     { icon: '🧮', label: 'Calculator',        id: 'calculator'        },
     { icon: '🤖', label: 'AI Analysis',       id: 'search',           action: () => openAI(null) },
-    { icon: '🔍', label: 'Property Finder',    id: 'property-finder'   },
+    { icon: '🔍', label: 'Deal Finder',         id: 'deal-finder'       },
     { icon: '🔔', label: 'Alerts',            id: 'alerts'            },
   ]
 
@@ -839,9 +839,9 @@ export default function Home() {
             )
           )}
 
-          {/* ── PROPERTY FINDER ─────────────────────────────────────────── */}
-          {tab === 'property-finder' && (
-            <PropertyFinder
+          {/* ── DEAL FINDER ─────────────────────────────────────────────── */}
+          {tab === 'deal-finder' && (
+            <DealFinder
               favouriteItems={favouriteItems}
               favourites={favourites}
               onToggleFavourite={toggleFavourite}
