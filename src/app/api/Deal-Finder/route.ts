@@ -1,489 +1,490 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server'
+import { MARKET_DATA, calcNetYield, calcGrossYield } from '@/lib/market-data'
 
-export const dynamic = "force-dynamic";
+const HD_BASE = 'https://api.homedata.co.uk'
+type CityKey = keyof typeof MARKET_DATA.cities
 
-type HomeDataListing = {
-  id: string;
-  street?: string | null;
-  postcode?: string | null;
-  transaction_type?: string | null;
-  latest_status?: string | null;
-  latest_price?: number | null;
-  previous_price?: number | null;
-  source?: string | null;
-  bedrooms?: number | null;
-  bathrooms?: number | null;
-  reception_rooms?: number | null;
-  property_type?: string | null;
-  ownership?: string | null;
-  is_new_build?: boolean | null;
-  has_garden?: boolean | null;
-  has_parking?: boolean | null;
-  has_solar_panels?: boolean | null;
-  is_reduced?: boolean | null;
-  times_reduced?: number | null;
-  is_withdrawn?: boolean | null;
-  days_on_market?: number | null;
-  added_date?: string | null;
-  agent_name?: string | null;
-  uprn?: string | null;
-  image_url?: string | null;
-};
+// ── Public types ──────────────────────────────────────────────────────────────
 
-export type DealCandidate = {
-  id: string;
-  uprn: string | null;
-  address: string;
-  displayAddress: string;
-  city: string | null;
-  postcode: string | null;
-  askingPrice: number | null;
-  previousAskingPrice: number | null;
-  rentEstimateMonthly: number | null;
-  grossYield: number | null;
-  netYield: number | null;
-  bedrooms: number | null;
-  bathrooms: number | null;
-  propertyType: string | null;
-  tenure: string | null;
-  epcRating: string | null;
-  listingStatus: "new_listing" | "reduced" | "active" | "under_offer" | "sold_stc";
-  listingDate: string | null;
-  updatedAt: string | null;
-  imageUrl: string | null;
-  investmentFitScore: number;
-  investmentFitLabel: string;
-  investmentReasons: string[];
-};
-
-const HOMEDATA_URL = "https://api.homedata.co.uk/api/live-listings/search/";
-
-const CITY_OUTCODES: Record<string, string[]> = {
-  London: ["E", "EC", "N", "NW", "SE", "SW", "W", "WC"],
-  Liverpool: ["L"],
-  Manchester: ["M"],
-  Birmingham: ["B"],
-  Leeds: ["LS"],
-  Sheffield: ["S"],
-  Bristol: ["BS"],
-  Nottingham: ["NG"],
-  Leicester: ["LE"],
-  Newcastle: ["NE"],
-  Cardiff: ["CF"],
-  Glasgow: ["G"],
-  Edinburgh: ["EH"],
-};
-
-function numberOrNull(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : null;
+export interface DealCandidate {
+  id: string
+  uprn: string | null
+  address: string
+  displayAddress: string
+  postcode: string
+  outcode: string | null
+  city: string | null
+  localAuthority: string | null
+  propertyType: string | null
+  bedrooms: number | null
+  bathrooms: number | null
+  floorAreaSqm: number | null
+  tenure: string | null
+  askingPrice: number
+  previousAskingPrice: number | null
+  listingStatus: 'for_sale' | 'new_listing' | 'reduced' | 'sold_stc' | 'unknown'
+  listingDate: string | null
+  updatedAt: string | null
+  imageUrl: string | null
+  imageUrls: string[]
+  rentEstimateMonthly: number | null
+  estimatedMarketValue: number | null
+  epcRating: string | null
+  grossYield: number | null
+  netYield: number | null
+  totalROI: number | null
+  investmentFitScore: number
+  investmentFitLabel: string
+  investmentReasons: string[]
+  badge: string
+  badgeColour: string
+  dataConfidence: number
+  source: 'homedata_live_listings'
 }
 
-function normaliseText(value: unknown): string | null {
-  if (value == null) return null;
-  const text = String(value).trim();
-  return text.length ? text : null;
+interface UserBenchmark {
+  favAvgNetYield: number
+  favAvgValue: number
+  favPropertyTypes: string[]
+  favMinBeds: number
+  favMaxBeds: number
+  favCities: string[]
 }
 
-function getOutcode(postcode: string | null | undefined): string {
-  if (!postcode) return "";
-  return postcode.trim().split(/\s+/)[0]?.toUpperCase() ?? "";
+// ── Rent estimation fallback ──────────────────────────────────────────────────
+
+function estimateRent(city: string | null, beds: number | null): number | null {
+  const cityKey = city as CityKey | null
+  if (!cityKey || !MARKET_DATA.cityByBedroom[cityKey]) return null
+  const cityData = MARKET_DATA.cityByBedroom[cityKey]
+  const baseRent = MARKET_DATA.cities[cityKey]?.avgRent ?? null
+  if (!baseRent) return null
+
+  const b = beds ?? 2
+  const bedKey =
+    b <= 0 ? 'studio' :
+    b === 1 ? '1bed' :
+    b === 2 ? '2bed' :
+    b === 3 ? '3bed' : '4bed'
+
+  const bedroomData = cityData[bedKey as keyof typeof cityData]
+  if (bedroomData) return bedroomData.avgRent
+  const mult =
+    b <= 0 ? 0.55 :
+    b === 1 ? 0.75 :
+    b === 2 ? 1.00 :
+    b === 3 ? 1.35 : 1.70
+  return Math.round(baseRent * mult)
 }
 
-function getAreaPrefix(postcode: string | null | undefined): string {
-  const outcode = getOutcode(postcode);
-  return outcode.replace(/[0-9]/g, "");
-}
+// ── Investment Fit Score (6-factor, 100 pts) ──────────────────────────────────
 
-function titleCase(value: string | null | undefined): string | null {
-  if (!value) return null;
-  return value
-    .replace(/_/g, " ")
-    .replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.slice(1).toLowerCase());
-}
+function calcInvestmentFit(
+  deal: {
+    netYield: number | null
+    askingPrice: number
+    epcRating: string | null
+    propertyType: string | null
+    bedrooms: number | null
+    listingStatus: string
+    city: string | null
+    dataFields: number
+  },
+  bench: UserBenchmark,
+): { score: number; label: string; badge: string; badgeColour: string; reasons: string[] } {
+  const reasons: string[] = []
 
-function inferCity(postcode: string | null | undefined): string | null {
-  const prefix = getAreaPrefix(postcode);
-  for (const [city, prefixes] of Object.entries(CITY_OUTCODES)) {
-    if (prefixes.includes(prefix)) return city;
+  // Factor A — return efficiency (30 pts)
+  let factorA = 4
+  const ny = deal.netYield ?? 0
+  const diff = ny - bench.favAvgNetYield
+  if      (diff >= 1.5)   { factorA = 30; reasons.push('Exceptional yield vs strategy') }
+  else if (diff >= 0.75)  { factorA = 25; reasons.push('Strong yield vs strategy') }
+  else if (diff >= 0)     { factorA = 20; reasons.push('Yield meets strategy') }
+  else if (diff >= -0.75) { factorA = 14 }
+  else if (diff >= -1.5)  { factorA =  8 }
+  else                    { factorA =  4 }
+
+  // Factor B — entry price efficiency (20 pts)
+  let factorB = 3
+  const cityData = MARKET_DATA.cities[deal.city as CityKey]
+  const cityAvgPrice = cityData?.avgPrice ?? bench.favAvgValue
+  const refPrice = bench.favAvgValue > 0 ? (cityAvgPrice + bench.favAvgValue) / 2 : cityAvgPrice
+  const priceDiff = refPrice > 0 ? (refPrice - deal.askingPrice) / refPrice : 0
+  if      (priceDiff >= 0.10)  { factorB = 20; reasons.push('Below market entry price') }
+  else if (priceDiff >= 0.05)  { factorB = 16; reasons.push('Competitive entry price') }
+  else if (priceDiff >= -0.05) { factorB = 12 }
+  else if (priceDiff >= -0.10) { factorB =  7 }
+  else                          { factorB =  3 }
+
+  // Factor C — strategy match (15 pts)
+  let factorC = 4
+  let matchCount = 0
+  const normType = (deal.propertyType ?? '').toLowerCase()
+  if (bench.favPropertyTypes.length > 0 &&
+      bench.favPropertyTypes.some(t => normType.includes(t.toLowerCase()))) matchCount++
+  if (deal.bedrooms != null &&
+      deal.bedrooms >= bench.favMinBeds && deal.bedrooms <= bench.favMaxBeds) matchCount++
+  const priceBand = bench.favAvgValue > 0 && deal.askingPrice > 0
+    ? Math.abs(deal.askingPrice - bench.favAvgValue) / bench.favAvgValue
+    : 1
+  if (priceBand < 0.30) matchCount++
+  if      (matchCount >= 3) { factorC = 15; reasons.push('Perfect strategy match') }
+  else if (matchCount >= 2) { factorC = 10 }
+  else if (matchCount >= 1) { factorC =  7 }
+  else                      { factorC =  4 }
+
+  // Factor D — location opportunity (15 pts)
+  let factorD = 5
+  if (cityData) {
+    const cy = cityData.avgYield
+    const cg = cityData.capitalGrowth1yr
+    if      (cy >= 7.0 && cg >= 3.0) { factorD = 15; reasons.push('High-yield growth city') }
+    else if (cy >= 6.5 || cg >= 3.0) { factorD = 12; reasons.push('Strong location fundamentals') }
+    else if (cy >= 5.5)               { factorD =  9 }
+    else                              { factorD =  5 }
   }
-  return null;
-}
-
-function mapStatus(listing: HomeDataListing): DealCandidate["listingStatus"] {
-  const status = String(listing.latest_status ?? "").toLowerCase();
-
-  if (listing.is_reduced || Number(listing.times_reduced ?? 0) > 0) return "reduced";
-  if (status.includes("under offer")) return "under_offer";
-  if (status.includes("sold stc")) return "sold_stc";
-
-  const days = Number(listing.days_on_market ?? 999);
-  if (Number.isFinite(days) && days <= 7) return "new_listing";
-
-  return "active";
-}
-
-function estimateRentMonthly(sale: HomeDataListing, rentalListings: HomeDataListing[]): number | null {
-  const saleBeds = numberOrNull(sale.bedrooms);
-  const saleType = normaliseText(sale.property_type);
-  const saleOutcode = getOutcode(sale.postcode);
-  const saleArea = getAreaPrefix(sale.postcode);
-
-  const rents = rentalListings
-    .filter((r) => {
-      const price = numberOrNull(r.latest_price);
-      if (!price) return false;
-
-      const sameOutcode = getOutcode(r.postcode) === saleOutcode;
-      const sameArea = getAreaPrefix(r.postcode) === saleArea;
-      const sameBeds = saleBeds ? numberOrNull(r.bedrooms) === saleBeds : true;
-      const sameType = saleType ? normaliseText(r.property_type) === saleType : true;
-
-      return (sameOutcode || sameArea) && sameBeds && sameType;
-    })
-    .map((r) => numberOrNull(r.latest_price))
-    .filter((v): v is number => v != null);
-
-  if (rents.length > 0) {
-    return Math.round(rents.reduce((a, b) => a + b, 0) / rents.length);
-  }
-
-  const fallbackRents = rentalListings
-    .filter((r) => getAreaPrefix(r.postcode) === saleArea)
-    .map((r) => numberOrNull(r.latest_price))
-    .filter((v): v is number => v != null);
-
-  if (fallbackRents.length > 0) {
-    return Math.round(fallbackRents.reduce((a, b) => a + b, 0) / fallbackRents.length);
+  if (bench.favCities.length > 0 && deal.city && !bench.favCities.includes(deal.city)) {
+    reasons.push('Cross-city opportunity')
   }
 
-  return null;
-}
+  // Factor E — risk & compliance (15 pts)
+  let factorE = 6
+  const epc = (deal.epcRating ?? '').toUpperCase()
+  if      (epc === 'A' || epc === 'B') { factorE = 15; reasons.push('EPC A/B rating') }
+  else if (epc === 'C')                { factorE = 12 }
+  else if (epc === 'D')                { factorE =  8 }
+  else if (epc >= 'E' && epc <= 'G')   { factorE =  3 }
+  else                                 { factorE =  6 }
+  if      (deal.listingStatus === 'reduced')     { factorE = Math.min(15, factorE + 2); reasons.push('Price reduced') }
+  else if (deal.listingStatus === 'new_listing') { factorE = Math.min(15, factorE + 1) }
 
-function calculateGrossYield(askingPrice: number | null, monthlyRent: number | null): number | null {
-  if (!askingPrice || !monthlyRent) return null;
-  return Number(((monthlyRent * 12) / askingPrice * 100).toFixed(1));
-}
+  // Factor F — data confidence (5 pts)
+  const df = deal.dataFields
+  const factorF = df >= 9 ? 5 : df >= 7 ? 4 : df >= 5 ? 3 : df >= 3 ? 2 : 1
 
-function calculateNetYield(grossYield: number | null): number | null {
-  if (!grossYield) return null;
-
-  // Simple landlord-cost deduction. Later you can replace this with your full AI yield model.
-  return Number((grossYield * 0.78).toFixed(1));
-}
-
-function scoreDeal(args: {
-  askingPrice: number | null;
-  netYield: number | null;
-  grossYield: number | null;
-  bedrooms: number | null;
-  propertyType: string | null;
-  listingStatus: DealCandidate["listingStatus"];
-  favAvgNetYield: number;
-  favAvgValue: number;
-  favPropertyTypes: string[];
-  favMinBeds: number;
-  favMaxBeds: number;
-}): { score: number; label: string; reasons: string[] } {
-  let score = 50;
-  const reasons: string[] = [];
-
-  if (args.netYield != null) {
-    if (args.netYield >= args.favAvgNetYield + 1.5) {
-      score += 25;
-      reasons.push("Strong yield");
-    } else if (args.netYield >= args.favAvgNetYield) {
-      score += 18;
-      reasons.push("Yield match");
-    } else if (args.netYield >= Math.max(4, args.favAvgNetYield - 1)) {
-      score += 10;
-    }
-  }
-
-  if (args.askingPrice != null && args.favAvgValue > 0) {
-    if (args.askingPrice <= args.favAvgValue * 0.9) {
-      score += 15;
-      reasons.push("Lower entry price");
-    } else if (args.askingPrice <= args.favAvgValue * 1.15) {
-      score += 8;
-      reasons.push("Price fit");
-    }
-  }
-
-  if (args.bedrooms != null && args.bedrooms >= args.favMinBeds && args.bedrooms <= args.favMaxBeds) {
-    score += 10;
-    reasons.push("Bedroom match");
-  }
-
-  if (args.propertyType && args.favPropertyTypes.length > 0) {
-    const wanted = args.favPropertyTypes.map((x) => x.toLowerCase().replace(/_/g, " "));
-    const actual = args.propertyType.toLowerCase().replace(/_/g, " ");
-    if (wanted.some((w) => actual.includes(w) || w.includes(actual))) {
-      score += 8;
-      reasons.push("Type match");
-    }
-  }
-
-  if (args.listingStatus === "new_listing") {
-    score += 5;
-    reasons.push("New listing");
-  }
-
-  if (args.listingStatus === "reduced") {
-    score += 7;
-    reasons.push("Price reduced");
-  }
-
-  score = Math.max(0, Math.min(98, Math.round(score)));
+  const score = factorA + factorB + factorC + factorD + factorE + factorF
 
   const label =
-    score >= 90 ? "Excellent fit" :
-    score >= 80 ? "Strong fit" :
-    score >= 70 ? "Good fit" :
-    score >= 60 ? "Possible fit" :
-    "Low fit";
+    score >= 90 ? 'Exceptional fit' :
+    score >= 80 ? 'Strong fit' :
+    score >= 70 ? 'Good fit' :
+    score >= 60 ? 'Speculative fit' : 'Weak fit'
 
-  return {
-    score,
-    label,
-    reasons: Array.from(new Set(reasons)).slice(0, 4),
-  };
+  const badge =
+    score >= 90 ? 'Top Deal' :
+    score >= 80 ? 'Strong Fit' :
+    score >= 70 ? 'Good Fit' : ''
+
+  const badgeColour =
+    score >= 90 ? 'bg-[#047857] text-white' :
+    score >= 80 ? 'bg-[#ECFDF5] text-[#047857]' :
+    score >= 70 ? 'bg-[#FFF7E6] text-[#B7791F]' : ''
+
+  return { score, label, badge, badgeColour, reasons: reasons.slice(0, 3) }
 }
 
-function passesFilters(deal: DealCandidate, request: NextRequest): boolean {
-  const params = request.nextUrl.searchParams;
+// ── Homedata raw listing shape ────────────────────────────────────────────────
 
-  const minPrice = numberOrNull(params.get("minPrice"));
-  const maxPrice = numberOrNull(params.get("maxPrice"));
-  const minYield = numberOrNull(params.get("minYield"));
-  const minBedrooms = numberOrNull(params.get("minBedrooms"));
-  const maxBedrooms = numberOrNull(params.get("maxBedrooms"));
-
-  const propertyTypes = (params.get("propertyTypes") ?? "")
-    .split(",")
-    .map((x) => x.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (minPrice && (!deal.askingPrice || deal.askingPrice < minPrice)) return false;
-  if (maxPrice && (!deal.askingPrice || deal.askingPrice > maxPrice)) return false;
-  if (minYield && (!deal.grossYield || deal.grossYield < minYield)) return false;
-  if (minBedrooms && (!deal.bedrooms || deal.bedrooms < minBedrooms)) return false;
-  if (maxBedrooms && maxBedrooms < 6 && deal.bedrooms != null && deal.bedrooms > maxBedrooms) return false;
-
-  if (propertyTypes.length && deal.propertyType) {
-    const actual = deal.propertyType.toLowerCase();
-    const matched = propertyTypes.some((t) => actual.includes(t.toLowerCase().replace("-", " ")));
-    if (!matched) return false;
-  }
-
-  return true;
+interface HomedataListing {
+  uprn?: string | number | null
+  id?: string | number | null
+  listing_id?: string | number | null
+  address?: string | null
+  full_address?: string | null
+  display_address?: string | null
+  postcode?: string | null
+  city?: string | null
+  town?: string | null
+  local_authority?: string | null
+  property_type?: string | null
+  bedrooms?: number | null
+  bathrooms?: number | null
+  floor_area_sqm?: number | null
+  tenure?: string | null
+  asking_price?: number | null
+  price?: number | null
+  asking_price_pence?: number | null
+  previous_asking_price?: number | null
+  status?: string | null
+  listing_status?: string | null
+  epc_rating?: string | null
+  current_energy_rating?: string | null
+  image_url?: string | null
+  images?: string[] | null
+  listing_date?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  rent_estimate?: number | null
+  estimated_rent?: number | null
+  estimated_market_value?: number | null
+  market_value?: number | null
+  gross_yield?: number | null
+  net_yield?: number | null
 }
 
-async function fetchHomeData(params: Record<string, string>) {
-  const apiKey = process.env.HOMEDATA_API_KEY;
+// ── Fetch listings from Homedata for one location ─────────────────────────────
 
-  if (!apiKey) {
-    return {
-      ok: false,
-      status: 500,
-      data: null,
-      error: "Missing HOMEDATA_API_KEY",
-    };
-  }
-
-  const url = new URL(HOMEDATA_URL);
-  Object.entries(params).forEach(([key, value]) => {
-    if (value) url.searchParams.set(key, value);
-  });
-
-  const response = await fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Authorization: `Api-Key ${apiKey}`,
-    },
-    cache: "no-store",
-  });
-
-  let data: any = null;
+async function fetchListingsForLocation(
+  location: string,
+  params: Record<string, string>,
+  apiKey: string,
+): Promise<{ ok: boolean; results: HomedataListing[]; statusCode?: number }> {
+  const qs = new URLSearchParams({ ...params, location, status: 'for_sale', page_size: '50' })
+  const url = `${HD_BASE}/api/listings/?${qs.toString()}`
 
   try {
-    data = await response.json();
-  } catch {
-    data = null;
-  }
+    const res = await fetch(url, {
+      headers: { Authorization: `Api-Key ${apiKey}` },
+      next: { revalidate: 300 },
+    })
 
-  if (!response.ok) {
-    return {
-      ok: false,
-      status: response.status,
-      data,
-      error: typeof data === "object" ? JSON.stringify(data) : "HomeData request failed",
-    };
-  }
+    if (!res.ok) {
+      let body = ''
+      try { body = await res.text() } catch {}
+      console.error(`[deal-finder] Homedata ${res.status} for ${location}:`, body.slice(0, 400))
+      return { ok: false, results: [], statusCode: res.status }
+    }
 
-  return {
-    ok: true,
-    status: response.status,
-    data,
-    error: null,
-  };
+    const data = await res.json() as
+      | { results?: HomedataListing[] }
+      | HomedataListing[]
+    const results = Array.isArray(data) ? data : (data.results ?? [])
+    return { ok: true, results }
+  } catch (err) {
+    console.error('[deal-finder] fetch error for', location, err)
+    return { ok: false, results: [] }
+  }
 }
 
-export async function GET(request: NextRequest) {
-  const params = request.nextUrl.searchParams;
+// ── Normalise a raw listing into DealCandidate ────────────────────────────────
 
-  const favAvgNetYield = Number(params.get("favAvgNetYield") ?? 4.5);
-  const favAvgValue = Number(params.get("favAvgValue") ?? 250000);
-  const favPropertyTypes = (params.get("favPropertyTypes") ?? "")
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
-  const favMinBeds = Number(params.get("favMinBeds") ?? 1);
-  const favMaxBeds = Number(params.get("favMaxBeds") ?? 5);
+function normaliseListing(raw: HomedataListing, bench: UserBenchmark): DealCandidate | null {
+  const askingPrice =
+    typeof raw.asking_price === 'number' && raw.asking_price > 0 ? raw.asking_price :
+    typeof raw.asking_price_pence === 'number' && raw.asking_price_pence > 0 ? raw.asking_price_pence / 100 :
+    typeof raw.price === 'number' && raw.price > 0 ? raw.price : 0
+  if (!askingPrice) return null
 
-  const cities = (params.get("cities") ?? "")
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
+  const uprn = raw.uprn != null ? String(raw.uprn) : null
+  const listingId = raw.listing_id != null ? String(raw.listing_id) :
+    raw.id != null ? String(raw.id) : null
+  const id = uprn ?? listingId ?? `dl-${Math.random().toString(36).slice(2)}`
 
-  const outcodes = (params.get("outcodes") ?? "")
-    .split(",")
-    .map((x) => x.trim().toUpperCase())
-    .filter(Boolean);
+  const address        = String(raw.full_address ?? raw.address ?? raw.display_address ?? '').trim()
+  const displayAddress = String(raw.display_address ?? raw.full_address ?? raw.address ?? '').trim()
+  const postcode       = String(raw.postcode ?? '').trim().toUpperCase()
+  const outcode        = postcode.split(' ')[0] || null
 
-  const saleResponse = await fetchHomeData({
-    page_size: "100",
-  });
+  const rawCity = String(raw.city ?? raw.town ?? '').trim()
+  const knownCityKeys = Object.keys(MARKET_DATA.cities)
+  const city = knownCityKeys.find(k => rawCity.toLowerCase().includes(k.toLowerCase())) ?? (rawCity || null)
 
-  if (!saleResponse.ok) {
-    console.error("[deal-finder] HomeData sale request failed", saleResponse.status, saleResponse.error);
+  const propertyType  = String(raw.property_type ?? '').trim() || null
+  const bedrooms      = typeof raw.bedrooms === 'number' ? raw.bedrooms : null
+  const bathrooms     = typeof raw.bathrooms === 'number' ? raw.bathrooms : null
+  const floorAreaSqm  = typeof raw.floor_area_sqm === 'number' ? raw.floor_area_sqm : null
+  const tenure        = String(raw.tenure ?? '').trim().toLowerCase() || null
 
-    return NextResponse.json(
-      {
-        status: "unavailable",
-        deals: [],
-        meta: null,
-        error: saleResponse.error,
-      },
-      { status: 200 }
-    );
+  const previousAskingPrice =
+    typeof raw.previous_asking_price === 'number' && raw.previous_asking_price !== askingPrice
+      ? raw.previous_asking_price : null
+
+  const rawStatus = String(raw.status ?? raw.listing_status ?? '').toLowerCase()
+  const listingStatus: DealCandidate['listingStatus'] =
+    rawStatus.includes('reduc') ? 'reduced' :
+    rawStatus.includes('new')   ? 'new_listing' :
+    rawStatus.includes('sold')  ? 'sold_stc' :
+    rawStatus.includes('sale')  ? 'for_sale' : 'unknown'
+
+  const listingDate = raw.listing_date ?? raw.created_at ?? null
+  const updatedAt   = raw.updated_at ?? null
+
+  const epcRating = String(raw.epc_rating ?? raw.current_energy_rating ?? '').trim().toUpperCase().match(/[A-G]/)?.[0] ?? null
+
+  const rawImageUrl = raw.image_url ?? (Array.isArray(raw.images) ? raw.images[0] : null) ?? null
+  const imageUrl    = typeof rawImageUrl === 'string' ? rawImageUrl : null
+  const imageUrls   = Array.isArray(raw.images)
+    ? raw.images.filter((u): u is string => typeof u === 'string')
+    : imageUrl ? [imageUrl] : []
+
+  const estimatedMarketValue =
+    typeof raw.estimated_market_value === 'number' ? raw.estimated_market_value :
+    typeof raw.market_value === 'number' ? raw.market_value : null
+
+  const rawRent = typeof raw.rent_estimate === 'number' ? raw.rent_estimate :
+    typeof raw.estimated_rent === 'number' ? raw.estimated_rent : null
+  const rentEstimateMonthly = rawRent ?? estimateRent(city, bedrooms)
+
+  const isFlat      = (propertyType ?? '').toLowerCase().includes('flat')
+  const isLeasehold = (tenure ?? '').includes('leasehold')
+  const serviceCharge = isFlat ? 2000 : 0
+  const groundRent    = isLeasehold ? 200 : 0
+
+  const grossYield = rentEstimateMonthly
+    ? (typeof raw.gross_yield === 'number'
+        ? raw.gross_yield
+        : calcGrossYield(askingPrice, rentEstimateMonthly))
+    : null
+  const netYield = rentEstimateMonthly
+    ? (typeof raw.net_yield === 'number'
+        ? raw.net_yield
+        : calcNetYield(askingPrice, rentEstimateMonthly, serviceCharge, groundRent))
+    : null
+  const totalROI = netYield != null && city
+    ? parseFloat((netYield + (MARKET_DATA.cities[city as CityKey]?.capitalGrowth1yr ?? 0)).toFixed(2))
+    : null
+
+  const dataFields = [uprn, address, postcode, city, propertyType, bedrooms, epcRating, rentEstimateMonthly, tenure]
+    .filter(f => f != null && f !== '' && f !== 0).length
+
+  const fit = calcInvestmentFit(
+    { netYield, askingPrice, epcRating, propertyType, bedrooms, listingStatus, city, dataFields },
+    bench,
+  )
+
+  return {
+    id, uprn, address, displayAddress, postcode, outcode,
+    city, localAuthority: String(raw.local_authority ?? '').trim() || null,
+    propertyType, bedrooms, bathrooms, floorAreaSqm, tenure,
+    askingPrice, previousAskingPrice,
+    listingStatus, listingDate, updatedAt,
+    imageUrl, imageUrls,
+    rentEstimateMonthly, estimatedMarketValue,
+    epcRating, grossYield, netYield, totalROI,
+    investmentFitScore: fit.score,
+    investmentFitLabel: fit.label,
+    investmentReasons: fit.reasons,
+    badge: fit.badge,
+    badgeColour: fit.badgeColour,
+    dataConfidence: dataFields,
+    source: 'homedata_live_listings',
   }
+}
 
-  const rentalResponse = await fetchHomeData({
-    page_size: "100",
-  });
+// ── Parse request params ──────────────────────────────────────────────────────
 
-  const rawListings = Array.isArray(saleResponse.data?.results)
-    ? (saleResponse.data.results as HomeDataListing[])
-    : [];
+function parseParams(req: NextRequest) {
+  const s = req.nextUrl.searchParams
+  const csv = (k: string) => (s.get(k) ?? '').split(',').map(v => v.trim()).filter(Boolean)
+  const num = (k: string) => parseFloat(s.get(k) ?? '') || 0
 
-  const rentalListings = Array.isArray(rentalResponse.data?.results)
-    ? (rentalResponse.data.results as HomeDataListing[]).filter(
-        (x) => String(x.transaction_type ?? "").toLowerCase() === "rental"
-      )
-    : [];
+  return {
+    mode: s.get('mode') ?? 'ai',
+    cities: csv('cities'),
+    outcodes: csv('outcodes'),
+    favAvgNetYield: num('favAvgNetYield') || 4.5,
+    favAvgValue: num('favAvgValue') || 250000,
+    favPropertyTypes: csv('favPropertyTypes'),
+    favMinBeds: num('favMinBeds') || 1,
+    favMaxBeds: num('favMaxBeds') || 5,
+    favCities: csv('favCities'),
+    minPrice: num('minPrice') || undefined,
+    maxPrice: num('maxPrice') || undefined,
+    minYield: num('minYield') || undefined,
+    propertyTypes: csv('propertyTypes'),
+    minBedrooms: num('minBedrooms') || undefined,
+    maxBedrooms: num('maxBedrooms') || undefined,
+  }
+}
 
-  const selectedCityPrefixes = cities.flatMap((city) => CITY_OUTCODES[city] ?? []);
+function buildHdParams(p: ReturnType<typeof parseParams>): Record<string, string> {
+  const q: Record<string, string> = {}
+  if (p.minPrice)             q.min_price      = String(p.minPrice)
+  if (p.maxPrice)             q.max_price      = String(p.maxPrice)
+  if (p.minBedrooms)          q.min_bedrooms   = String(p.minBedrooms)
+  if (p.maxBedrooms)          q.max_bedrooms   = String(p.maxBedrooms)
+  if (p.propertyTypes.length) q.property_type  = p.propertyTypes[0]
+  return q
+}
 
-  const saleListings = rawListings
-    .filter((listing) => String(listing.transaction_type ?? "").toLowerCase() === "sale")
-    .filter((listing) => !listing.is_withdrawn)
-    .filter((listing) => {
-      const area = getAreaPrefix(listing.postcode);
-      const outcode = getOutcode(listing.postcode);
+// ── Route handler ─────────────────────────────────────────────────────────────
 
-      if (outcodes.length > 0 && outcodes.includes(outcode)) return true;
-      if (selectedCityPrefixes.length > 0 && selectedCityPrefixes.includes(area)) return true;
+export async function GET(req: NextRequest) {
+  try {
+    const apiKey = process.env.HOMEDATA_API_KEY
+    if (!apiKey) {
+      return NextResponse.json({ status: 'unavailable', deals: [], meta: null })
+    }
 
-      // If no area filters were supplied, keep the listing.
-      if (outcodes.length === 0 && selectedCityPrefixes.length === 0) return true;
+    const p = parseParams(req)
 
-      // If area filters were supplied but no listings match, this filter may reduce results.
-      return false;
-    });
+    const bench: UserBenchmark = {
+      favAvgNetYield: p.favAvgNetYield,
+      favAvgValue: p.favAvgValue,
+      favPropertyTypes: p.favPropertyTypes,
+      favMinBeds: p.favMinBeds,
+      favMaxBeds: p.favMaxBeds,
+      favCities: p.favCities,
+    }
 
-  const fallbackListings =
-    saleListings.length > 0
-      ? saleListings
-      : rawListings.filter((listing) => String(listing.transaction_type ?? "").toLowerCase() === "sale");
+    const hdParams = buildHdParams(p)
+    const locations = Array.from(new Set([...p.cities, ...p.outcodes])).filter(Boolean)
 
-  const deals: DealCandidate[] = fallbackListings
-    .map((listing) => {
-      const askingPrice = numberOrNull(listing.latest_price);
-      const rentEstimateMonthly = estimateRentMonthly(listing, rentalListings);
-      const grossYield = calculateGrossYield(askingPrice, rentEstimateMonthly);
-      const netYield = calculateNetYield(grossYield);
-      const listingStatus = mapStatus(listing);
-      const propertyType = titleCase(listing.property_type);
-      const bedrooms = numberOrNull(listing.bedrooms);
-      const bathrooms = numberOrNull(listing.bathrooms);
-      const postcode = normaliseText(listing.postcode);
-      const city = inferCity(postcode);
+    if (!locations.length) {
+      return NextResponse.json({ status: 'unavailable', deals: [], meta: null })
+    }
 
-      const fit = scoreDeal({
-        askingPrice,
-        netYield,
-        grossYield,
-        bedrooms,
-        propertyType,
-        listingStatus,
-        favAvgNetYield: Number.isFinite(favAvgNetYield) ? favAvgNetYield : 4.5,
-        favAvgValue: Number.isFinite(favAvgValue) ? favAvgValue : 250000,
-        favPropertyTypes,
-        favMinBeds: Number.isFinite(favMinBeds) ? favMinBeds : 1,
-        favMaxBeds: Number.isFinite(favMaxBeds) ? favMaxBeds : 5,
-      });
+    const fetches = await Promise.allSettled(
+      locations.map(loc => fetchListingsForLocation(loc, hdParams, apiKey))
+    )
 
-      const street = normaliseText(listing.street);
-      const displayAddress = [street, postcode].filter(Boolean).join(", ");
+    const allRaw: HomedataListing[] = []
+    let anyOk = false
+    for (const result of fetches) {
+      if (result.status === 'fulfilled' && result.value.ok) {
+        anyOk = true
+        allRaw.push(...result.value.results)
+      }
+    }
 
-      return {
-        id: String(listing.id),
-        uprn: normaliseText(listing.uprn),
-        address: displayAddress || street || postcode || "Address unavailable",
-        displayAddress: displayAddress || street || postcode || "Address unavailable",
-        city,
-        postcode,
-        askingPrice,
-        previousAskingPrice: numberOrNull(listing.previous_price),
-        rentEstimateMonthly,
-        grossYield,
-        netYield,
-        bedrooms,
-        bathrooms,
-        propertyType,
-        tenure: normaliseText(listing.ownership),
-        epcRating: null,
-        listingStatus,
-        listingDate: normaliseText(listing.added_date),
-        updatedAt: normaliseText(listing.added_date),
-        imageUrl: normaliseText(listing.image_url),
-        investmentFitScore: fit.score,
-        investmentFitLabel: fit.label,
-        investmentReasons: fit.reasons,
-      };
+    if (!anyOk) {
+      return NextResponse.json({ status: 'unavailable', deals: [], meta: null })
+    }
+
+    // Deduplicate
+    const seen = new Set<string>()
+    const deduped = allRaw.filter(r => {
+      const key = String(r.uprn ?? r.listing_id ?? r.id ?? '')
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
     })
-    .filter((deal) => passesFilters(deal, request))
-    .sort((a, b) => b.investmentFitScore - a.investmentFitScore)
-    .slice(0, 30);
 
-  const avg = (values: number[]) =>
-    values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+    // Normalise and filter
+    let deals = deduped
+      .map(raw => normaliseListing(raw, bench))
+      .filter((d): d is DealCandidate => d !== null)
 
-  const netYields = deals.map((d) => d.netYield).filter((v): v is number => v != null);
-  const askingPrices = deals.map((d) => d.askingPrice).filter((v): v is number => v != null);
-  const bestDeal = [...deals].sort((a, b) => (b.netYield ?? 0) - (a.netYield ?? 0))[0];
+    if (p.minYield) {
+      deals = deals.filter(d => d.netYield != null && d.netYield >= p.minYield!)
+    }
 
-  return NextResponse.json({
-    status: "ok",
-    deals,
-    meta: {
+    deals.sort((a, b) => b.investmentFitScore - a.investmentFitScore)
+    deals = deals.slice(0, 50)
+
+    // Meta
+    const yields = deals.map(d => d.netYield).filter((y): y is number => y != null)
+    const prices = deals.map(d => d.askingPrice).filter(v => v > 0)
+    const bestYield = yields.length ? Math.max(...yields) : null
+    const bestIdx   = bestYield != null ? yields.indexOf(bestYield) : -1
+
+    const meta = {
       totalDeals: deals.length,
-      avgNetYield: avg(netYields),
-      avgAskingPrice: avg(askingPrices),
-      bestNetYield: bestDeal?.netYield ?? null,
-      bestNetYieldCity: bestDeal?.city ?? bestDeal?.postcode ?? null,
-      newListingsCount: deals.filter((d) => d.listingStatus === "new_listing").length,
-    },
-  });
+      avgNetYield: yields.length
+        ? parseFloat((yields.reduce((a, b) => a + b, 0) / yields.length).toFixed(1))
+        : null,
+      avgAskingPrice: prices.length
+        ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length / 1000) * 1000
+        : null,
+      bestNetYield: bestYield != null ? parseFloat(bestYield.toFixed(1)) : null,
+      bestNetYieldCity: bestIdx >= 0 ? (deals[bestIdx]?.city ?? null) : null,
+      newListingsCount: deals.filter(d => d.listingStatus === 'new_listing').length,
+    }
+
+    return NextResponse.json({ status: 'ok', deals, meta })
+  } catch (err) {
+    console.error('[deal-finder] unhandled error:', err)
+    return NextResponse.json({ status: 'unavailable', deals: [], meta: null })
+  }
 }
