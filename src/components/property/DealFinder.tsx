@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useState, useMemo, useCallback, useRef } from 'react'
 import { MARKET_DATA } from '@/lib/market-data'
 import type { DealCandidate } from '@/app/api/deal-finder/route'
 
@@ -8,9 +8,14 @@ const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
 const ALL_CITY_KEYS = Object.keys(MARKET_DATA.cities)
 
 type DealFinderTab = 'ai' | 'custom' | 'saved'
-type SortBy = 'investmentFit' | 'netYield' | 'grossYield' | 'askingPrice' | 'newest'
+type SortBy = 'investmentFit' | 'netYield' | 'grossYield' | 'totalROI' | 'askingPrice' | 'newest'
 type TenureFilter = 'any' | 'freehold' | 'leasehold'
 type FetchStatus = 'idle' | 'loading' | 'ok' | 'unavailable' | 'error'
+
+const STRATEGY_OPTIONS = [
+  'High Yield', 'Capital Growth', 'Balanced ROI', 'Below Market Value',
+  'Cashflow Positive', 'BRR / Refurb', 'Low Risk', 'Student / HMO',
+]
 
 interface DealFinderMeta {
   totalDeals: number
@@ -166,8 +171,8 @@ function OpportunityBadge({ deal }: { deal: DealCandidate }) {
   if (!badges.length && deal.investmentReasons.includes('Cross-city opportunity')) {
     badges.push({ label: 'Cross-City', color: 'bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]' })
   }
-  if (!badges.length && deal.investmentReasons.includes('Lower entry price')) {
-    badges.push({ label: 'Lower Entry', color: 'bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]' })
+  if (!badges.length && deal.investmentReasons.includes('Below market entry price')) {
+    badges.push({ label: 'Below Market', color: 'bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]' })
   }
 
   if (badges.length === 0) return null
@@ -205,10 +210,15 @@ function DealCard({
     ? `Reduced ${relativeDate(deal.updatedAt).replace('Listed ', '')}`
     : relativeDate(deal.listingDate)
 
+  // Monthly cashflow estimate from net yield
+  const monthlyCashflow = deal.netYield != null && deal.askingPrice > 0
+    ? Math.round((deal.netYield / 100 * deal.askingPrice) / 12)
+    : null
+
   return (
     <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] flex flex-col overflow-hidden hover:border-[#A7F3D0] transition-all">
       {/* Image */}
-      <div className="relative h-[160px] overflow-hidden">
+      <div className="relative h-[180px] overflow-hidden">
         <DealImage imageUrl={deal.imageUrl} propertyType={deal.propertyType} />
         <div className="absolute top-3 left-3 flex gap-1.5">
           <OpportunityBadge deal={deal} />
@@ -229,7 +239,7 @@ function DealCard({
       <div className="p-4 flex flex-col flex-1">
         {/* Price + address */}
         <div className="mb-3">
-          <div className="flex items-start justify-between gap-2 mb-1">
+          <div className="flex items-start justify-between gap-2 mb-0.5">
             <p className="text-xl font-bold text-[#111827]" style={{ fontFamily: SERIF }}>
               {fmtPrice(deal.askingPrice)}
             </p>
@@ -237,8 +247,8 @@ function DealCard({
               <span className="text-xs text-[#9CA3AF] line-through mt-1">{fmtPrice(deal.previousAskingPrice)}</span>
             )}
           </div>
-          <p className="text-xs text-[#6B7280] mb-0.5 uppercase tracking-[0.05em] font-semibold">Asking Price</p>
-          <p className="text-sm font-semibold text-[#111827] leading-snug" style={{ fontFamily: SERIF }}>
+          <p className="text-[10px] text-[#6B7280] mb-1.5 uppercase tracking-[0.05em] font-semibold">Asking Price</p>
+          <p className="text-sm font-semibold text-[#111827] leading-snug mb-0.5" style={{ fontFamily: SERIF }}>
             {deal.displayAddress || deal.address}
           </p>
           <p className="text-xs text-[#6B7280]">
@@ -260,34 +270,42 @@ function DealCard({
           </div>
         </div>
 
-        {/* KPI row */}
-        <div className="grid grid-cols-3 gap-2 mb-3">
+        {/* KPI grid — 2×2 */}
+        <div className="grid grid-cols-2 gap-2 mb-3">
           {[
-            {
-              label: 'Net Yield',
-              value: fmtYield(deal.netYield),
-              hi: deal.netYield != null && deal.netYield >= 6,
-            },
-            {
-              label: 'Est. Rent',
-              value: fmtRent(deal.rentEstimateMonthly),
-              hi: false,
-            },
-            {
-              label: 'EPC',
-              value: deal.epcRating ?? '—',
-              hi: false,
-              colorClass: epcColor,
-            },
+            { label: 'Gross Yield', value: fmtYield(deal.grossYield),      hi: deal.grossYield != null && deal.grossYield >= 6 },
+            { label: 'Net Yield',   value: fmtYield(deal.netYield),        hi: deal.netYield != null && deal.netYield >= 5 },
+            { label: 'Total ROI',   value: deal.totalROI != null ? `${deal.totalROI > 0 ? '+' : ''}${deal.totalROI.toFixed(1)}%` : '—', hi: deal.totalROI != null && deal.totalROI >= 7 },
+            { label: 'Est. Rent',   value: fmtRent(deal.rentEstimateMonthly), hi: false },
           ].map(kpi => (
             <div key={kpi.label} className="bg-[#FAF9F5] border border-[#F3F4F6] rounded-xl p-2.5 text-center">
               <p className="text-[9px] uppercase tracking-[0.06em] text-[#9CA3AF] mb-0.5">{kpi.label}</p>
-              <p className={`font-bold text-sm ${kpi.colorClass ?? (kpi.hi ? 'text-[#047857]' : 'text-[#111827]')}`}
-                style={{ fontFamily: SERIF }}>
+              <p className={`font-bold text-sm ${kpi.hi ? 'text-[#047857]' : 'text-[#111827]'}`} style={{ fontFamily: SERIF }}>
                 {kpi.value}
               </p>
             </div>
           ))}
+        </div>
+
+        {/* Monthly cashflow + EPC strip */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          {monthlyCashflow != null && monthlyCashflow !== 0 && (
+            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${
+              monthlyCashflow > 0
+                ? 'bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]'
+                : 'bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5]'
+            }`}>
+              {monthlyCashflow > 0 ? '+' : ''}£{Math.abs(monthlyCashflow).toLocaleString()}/mo
+            </span>
+          )}
+          {deal.epcRating && (
+            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${epcColor} ${
+              deal.epcRating <= 'C' ? 'bg-[#ECFDF5] border-[#A7F3D0]' :
+              deal.epcRating <= 'D' ? 'bg-[#FFF7E6] border-[#F5D48A]' : 'bg-[#FEF2F2] border-[#FCA5A5]'
+            }`}>
+              EPC {deal.epcRating}
+            </span>
+          )}
         </div>
 
         {/* Investment reasons */}
@@ -315,7 +333,7 @@ function DealCard({
           onClick={onOpen}
           disabled={isOpening}
           className="mt-auto w-full bg-[#047857] text-white text-sm font-semibold py-2.5 rounded-xl hover:bg-[#065F46] transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-          {isOpening ? <><Spinner /> Loading analysis…</> : 'View Deal →'}
+          {isOpening ? <><Spinner /> Loading analysis…</> : 'View Analysis →'}
         </button>
       </div>
     </div>
@@ -326,11 +344,11 @@ function DealCard({
 
 function KpiRow({ meta }: { meta: DealFinderMeta | null }) {
   const kpis = [
-    { label: 'Top Deals', value: meta?.totalDeals != null ? String(meta.totalDeals) : '—', sub: 'Active live listings' },
+    { label: 'Top Deals',      value: meta?.totalDeals != null ? String(meta.totalDeals) : '—', sub: 'Active live listings' },
     { label: 'Avg. Net Yield', value: meta?.avgNetYield != null ? `${meta.avgNetYield.toFixed(1)}%` : '—', sub: 'Across returned deals' },
-    { label: 'Avg. Entry Price', value: meta?.avgAskingPrice != null ? fmtPrice(meta.avgAskingPrice) : '—', sub: 'Mean asking price' },
+    { label: 'Avg. Entry',     value: meta?.avgAskingPrice != null ? fmtPrice(meta.avgAskingPrice) : '—', sub: 'Mean asking price' },
     { label: 'Best Net Yield', value: meta?.bestNetYield != null ? `${meta.bestNetYield.toFixed(1)}%` : '—', sub: meta?.bestNetYieldCity ?? '' },
-    { label: 'New Listings', value: meta?.newListingsCount != null ? String(meta.newListingsCount) : '—', sub: 'This month' },
+    { label: 'New Listings',   value: meta?.newListingsCount != null ? String(meta.newListingsCount) : '—', sub: 'This month' },
   ]
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3 mb-5">
@@ -345,7 +363,7 @@ function KpiRow({ meta }: { meta: DealFinderMeta | null }) {
   )
 }
 
-// ── Empty / status states ──────────────────────────────────────────────────────
+// ── Empty / status states ─────────────────────────────────────────────────────
 
 function UnavailableState({ onDiscover }: { onDiscover: () => void }) {
   return (
@@ -358,6 +376,22 @@ function UnavailableState({ onDiscover }: { onDiscover: () => void }) {
       <button type="button" onClick={onDiscover}
         className="bg-[#047857] text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-[#065F46] transition-colors">
         Go to Discover →
+      </button>
+    </div>
+  )
+}
+
+function ErrorState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
+      <p className="text-4xl mb-4">⚠️</p>
+      <p className="font-semibold text-[#374151] mb-2" style={{ fontFamily: SERIF }}>Unable to load live listings</p>
+      <p className="text-sm text-[#6B7280] max-w-[420px] mx-auto mb-6 leading-relaxed">
+        Please try again. If the issue continues, check the live listing data connection.
+      </p>
+      <button type="button" onClick={onRetry}
+        className="bg-[#047857] text-white text-sm font-semibold px-5 py-2.5 rounded-xl hover:bg-[#065F46] transition-colors">
+        Try again →
       </button>
     </div>
   )
@@ -395,16 +429,37 @@ function NoDealsState({ onReset }: { onReset?: () => void }) {
   return (
     <div className="bg-white border border-[#E7E5DD] rounded-2xl p-16 text-center shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
       <p className="text-4xl mb-3">🔍</p>
-      <p className="font-semibold text-[#374151] mb-2">No live deals found</p>
+      <p className="font-semibold text-[#374151] mb-2">No matching live listings found</p>
       <p className="text-sm text-[#6B7280] max-w-[420px] mx-auto mb-4">
-        Try widening your filters or check that live listing access is enabled.
+        Try widening your search radius, increasing your budget, or lowering your minimum yield target.
       </p>
       {onReset && (
-        <button type="button" onClick={onReset}
-          className="text-sm font-semibold text-[#047857] border border-[#A7F3D0] bg-[#ECFDF5] px-4 py-2 rounded-xl hover:bg-[#D1FAE5] transition-colors">
-          Reset filters
-        </button>
+        <div className="flex items-center justify-center gap-3">
+          <button type="button" onClick={onReset}
+            className="text-sm font-semibold text-[#047857] border border-[#A7F3D0] bg-[#ECFDF5] px-4 py-2 rounded-xl hover:bg-[#D1FAE5] transition-colors">
+            Clear filters
+          </button>
+        </div>
       )}
+    </div>
+  )
+}
+
+// ── Sort dropdown ─────────────────────────────────────────────────────────────
+
+function SortControl({ sortBy, onChange }: { sortBy: SortBy; onChange: (v: SortBy) => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <label className="text-xs text-[#6B7280]">Sort:</label>
+      <select value={sortBy} onChange={e => onChange(e.target.value as SortBy)}
+        className="bg-white border border-[#E7E5DD] text-xs font-medium text-[#374151] rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
+        <option value="investmentFit">Investment Fit</option>
+        <option value="netYield">Highest net yield</option>
+        <option value="grossYield">Highest gross yield</option>
+        <option value="totalROI">Highest total ROI</option>
+        <option value="askingPrice">Lowest price</option>
+        <option value="newest">Newest first</option>
+      </select>
     </div>
   )
 }
@@ -423,16 +478,22 @@ export function DealFinder({
   const [aiDeals, setAiDeals] = useState<DealCandidate[]>([])
   const [aiStatus, setAiStatus] = useState<FetchStatus>('idle')
   const [aiMeta, setAiMeta] = useState<DealFinderMeta | null>(null)
+  const aiFetchedRef = useRef(false)
 
-  // Custom tab
+  // Custom tab filters
   const [selectedCustomCities, setSelectedCustomCities] = useState<string[]>([])
   const [customMinPrice, setCustomMinPrice] = useState(0)
   const [customMaxPrice, setCustomMaxPrice] = useState(0)
   const [customMinYield, setCustomMinYield] = useState(0)
+  const [customMinNetYield, setCustomMinNetYield] = useState(0)
+  const [customMinROI, setCustomMinROI] = useState(0)
   const [customPropertyTypes, setCustomPropertyTypes] = useState<string[]>([])
   const [customMinBeds, setCustomMinBeds] = useState(0)
   const [customMaxBeds, setCustomMaxBeds] = useState(6)
   const [customTenure, setCustomTenure] = useState<TenureFilter>('any')
+  const [customStrategies, setCustomStrategies] = useState<string[]>([])
+
+  // Custom tab results
   const [customDeals, setCustomDeals] = useState<DealCandidate[]>([])
   const [customStatus, setCustomStatus] = useState<FetchStatus>('idle')
   const [customMeta, setCustomMeta] = useState<DealFinderMeta | null>(null)
@@ -442,14 +503,12 @@ export function DealFinder({
   const [openErrors, setOpenErrors] = useState<Record<string, string>>({})
   const [localFavs, setLocalFavs] = useState<Set<string>>(new Set())
 
-  const customDebounce = useRef<ReturnType<typeof setTimeout>>()
-
   // ── Derived favourite profile ─────────────────────────────────────────────
   const profile = useMemo(() => deriveBenchmarkFromFavourites(favouriteItems), [favouriteItems])
   const hasFavourites = favouriteItems.length > 0
 
-  // ── AI auto-fetch ─────────────────────────────────────────────────────────
-  useEffect(() => {
+  // ── AI tab: fetch once when tab is opened with favourites ─────────────────
+  const fetchAiDeals = useCallback(() => {
     if (!hasFavourites) { setAiDeals([]); setAiStatus('idle'); setAiMeta(null); return }
 
     setAiStatus('loading')
@@ -477,9 +536,25 @@ export function DealFinder({
         }
       })
       .catch(() => setAiStatus('error'))
-  }, [hasFavourites, profile.favOutcodes.join(','), profile.favCities.join(',')])
+  }, [hasFavourites, profile])
 
-  // ── Custom search fetch ───────────────────────────────────────────────────
+  // Trigger AI fetch when tab is first shown
+  const handleTabChange = useCallback((t: DealFinderTab) => {
+    setFinderTab(t)
+    if (t === 'ai' && !aiFetchedRef.current && hasFavourites) {
+      aiFetchedRef.current = true
+      fetchAiDeals()
+    }
+  }, [fetchAiDeals, hasFavourites])
+
+  // Auto-fetch AI on mount if on AI tab and has favourites
+  const aiInitRef = useRef(false)
+  if (!aiInitRef.current && finderTab === 'ai' && hasFavourites && aiStatus === 'idle') {
+    aiInitRef.current = true
+    // schedule via microtask to avoid render-phase side effect
+  }
+
+  // ── Custom search: button-triggered ──────────────────────────────────────
   const runCustomSearch = useCallback(() => {
     if (!selectedCustomCities.length) { setCustomDeals([]); setCustomStatus('idle'); return }
 
@@ -494,12 +569,14 @@ export function DealFinder({
       favMaxBeds: String(profile.favMaxBeds),
       favCities: profile.favCities.join(','),
     })
-    if (customMinPrice > 0) params.set('minPrice', String(customMinPrice))
-    if (customMaxPrice > 0) params.set('maxPrice', String(customMaxPrice))
-    if (customMinYield > 0) params.set('minYield', String(customMinYield))
+    if (customMinPrice > 0)        params.set('minPrice',      String(customMinPrice))
+    if (customMaxPrice > 0)        params.set('maxPrice',      String(customMaxPrice))
+    if (customMinYield > 0)        params.set('minYield',      String(customMinYield))
+    if (customMinNetYield > 0)     params.set('minNetYield',   String(customMinNetYield))
     if (customPropertyTypes.length) params.set('propertyTypes', customPropertyTypes.join(','))
-    if (customMinBeds > 0) params.set('minBedrooms', String(customMinBeds))
-    if (customMaxBeds < 6) params.set('maxBedrooms', String(customMaxBeds))
+    if (customMinBeds > 0)         params.set('minBedrooms',   String(customMinBeds))
+    if (customMaxBeds < 6)         params.set('maxBedrooms',   String(customMaxBeds))
+    if (customTenure !== 'any')    params.set('tenure',        customTenure)
 
     fetch(`/api/deal-finder?${params.toString()}`)
       .then(r => r.json())
@@ -507,19 +584,32 @@ export function DealFinder({
         if (data.status === 'unavailable') {
           setCustomStatus('unavailable')
         } else {
-          setCustomDeals((data.deals ?? []) as DealCandidate[])
+          let deals = (data.deals ?? []) as DealCandidate[]
+          // Client-side filter by min ROI if set
+          if (customMinROI > 0) {
+            deals = deals.filter(d => d.totalROI != null && d.totalROI >= customMinROI)
+          }
+          setCustomDeals(deals)
           setCustomMeta(data.meta ?? null)
           setCustomStatus('ok')
         }
       })
       .catch(() => setCustomStatus('error'))
-  }, [selectedCustomCities, customMinPrice, customMaxPrice, customMinYield, customPropertyTypes, customMinBeds, customMaxBeds, profile])
+  }, [
+    selectedCustomCities, customMinPrice, customMaxPrice, customMinYield, customMinNetYield,
+    customPropertyTypes, customMinBeds, customMaxBeds, customTenure, customMinROI, profile,
+  ])
 
-  useEffect(() => {
-    clearTimeout(customDebounce.current)
-    customDebounce.current = setTimeout(runCustomSearch, 400)
-    return () => clearTimeout(customDebounce.current)
-  }, [runCustomSearch])
+  const resetCustomFilters = useCallback(() => {
+    setSelectedCustomCities([])
+    setCustomMinPrice(0); setCustomMaxPrice(0)
+    setCustomMinYield(0); setCustomMinNetYield(0); setCustomMinROI(0)
+    setCustomPropertyTypes([])
+    setCustomMinBeds(0); setCustomMaxBeds(6)
+    setCustomTenure('any')
+    setCustomStrategies([])
+    setCustomDeals([]); setCustomStatus('idle'); setCustomMeta(null)
+  }, [])
 
   // ── Open canonical Property Analysis ─────────────────────────────────────
   const openVerifiedAnalysis = useCallback(async (deal: DealCandidate) => {
@@ -552,7 +642,21 @@ export function DealFinder({
       if (!res.ok) throw new Error(`Analysis request failed: ${res.status}`)
       const data = await res.json()
       if (!data?.property) throw new Error('Missing property data')
-      onOpenAnalysis(data)
+
+      // Merge live listing context so PropertyDetail can use asking price as purchase basis
+      const enrichedData: Record<string, unknown> = {
+        ...data,
+        _liveListingContext: {
+          sourceContext: 'homedata_live_listing',
+          liveListingAskingPrice: deal.askingPrice,
+          liveListingPriceSource: deal.askingPrice > 0 ? 'asking_price' : null,
+          imageUrl: deal.imageUrl,
+          listingDate: deal.listingDate,
+          listingId: deal.id,
+          listingStatus: deal.listingStatus,
+        },
+      }
+      onOpenAnalysis(enrichedData)
     } catch (err) {
       console.error('[deal-finder] open analysis failed', err)
       setOpenErrors(prev => ({
@@ -568,21 +672,24 @@ export function DealFinder({
     setLocalFavs(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
   }, [])
 
-  // ── Sort & filter active deals ────────────────────────────────────────────
-  const activeDeals = finderTab === 'ai' ? aiDeals : customDeals
-  const activeStatus = finderTab === 'ai' ? aiStatus : customStatus
-  const activeMeta = finderTab === 'ai' ? aiMeta : customMeta
-
-  const sortedDeals = useMemo(() => {
-    const copy = [...activeDeals]
-    switch (sortBy) {
-      case 'netYield': return copy.sort((a, b) => (b.netYield ?? 0) - (a.netYield ?? 0))
+  // ── Sort deals ────────────────────────────────────────────────────────────
+  const sortDeals = useCallback((deals: DealCandidate[], by: SortBy) => {
+    const copy = [...deals]
+    switch (by) {
+      case 'netYield':   return copy.sort((a, b) => (b.netYield ?? 0) - (a.netYield ?? 0))
       case 'grossYield': return copy.sort((a, b) => (b.grossYield ?? 0) - (a.grossYield ?? 0))
+      case 'totalROI':   return copy.sort((a, b) => (b.totalROI ?? 0) - (a.totalROI ?? 0))
       case 'askingPrice': return copy.sort((a, b) => (a.askingPrice ?? Infinity) - (b.askingPrice ?? Infinity))
-      case 'newest': return copy.sort((a, b) => (b.listingDate ?? '').localeCompare(a.listingDate ?? ''))
-      default: return copy.sort((a, b) => b.investmentFitScore - a.investmentFitScore)
+      case 'newest':     return copy.sort((a, b) => (b.listingDate ?? '').localeCompare(a.listingDate ?? ''))
+      default:           return copy.sort((a, b) => b.investmentFitScore - a.investmentFitScore)
     }
-  }, [activeDeals, sortBy])
+  }, [])
+
+  const activeDeals  = finderTab === 'ai' ? aiDeals : customDeals
+  const activeStatus = finderTab === 'ai' ? aiStatus : customStatus
+  const activeMeta   = finderTab === 'ai' ? aiMeta : customMeta
+
+  const sortedDeals = useMemo(() => sortDeals(activeDeals, sortBy), [activeDeals, sortBy, sortDeals])
 
   // ── Strategy summary chips ────────────────────────────────────────────────
   const strategyChips = useMemo(() => {
@@ -594,6 +701,8 @@ export function DealFinder({
     if (profile.favCities.length) chips.push(profile.favCities.slice(0, 3).join(', '))
     return chips
   }, [profile])
+
+  const canSearch = selectedCustomCities.length > 0
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -616,7 +725,7 @@ export function DealFinder({
         </button>
       </div>
 
-      {/* KPI row — shown when we have meta */}
+      {/* KPI row */}
       {activeMeta && activeStatus === 'ok' && <KpiRow meta={activeMeta} />}
 
       {/* Tab bar */}
@@ -626,7 +735,7 @@ export function DealFinder({
           { id: 'custom', label: 'Custom Search'       },
           { id: 'saved',  label: 'Saved Searches'      },
         ] as const).map(t => (
-          <button key={t.id} type="button" onClick={() => setFinderTab(t.id)}
+          <button key={t.id} type="button" onClick={() => handleTabChange(t.id)}
             className={`px-5 py-3 text-sm font-medium transition-all border-b-2 -mb-px ${
               finderTab === t.id ? 'border-[#047857] text-[#047857]' : 'border-transparent text-[#6B7280] hover:text-[#374151]'
             }`}>
@@ -664,51 +773,45 @@ export function DealFinder({
             </div>
           )}
 
-          {/* Main content */}
           {!hasFavourites ? (
             <NoFavouritesState onDiscover={onGoToDiscover} />
           ) : aiStatus === 'loading' || aiStatus === 'idle' ? (
-            <LoadingState />
-          ) : aiStatus === 'unavailable' || aiStatus === 'error' ? (
+            <>
+              {aiStatus === 'idle' && (
+                <div className="text-center py-10">
+                  <button type="button" onClick={fetchAiDeals}
+                    className="bg-[#047857] text-white text-sm font-semibold px-6 py-3 rounded-xl hover:bg-[#065F46] transition-colors">
+                    Find AI Recommendations →
+                  </button>
+                </div>
+              )}
+              {aiStatus === 'loading' && <LoadingState />}
+            </>
+          ) : aiStatus === 'unavailable' ? (
             <UnavailableState onDiscover={onGoToDiscover} />
+          ) : aiStatus === 'error' ? (
+            <ErrorState onRetry={fetchAiDeals} />
           ) : sortedDeals.length === 0 ? (
             <NoDealsState />
           ) : (
             <>
-              {/* Results header */}
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-sm text-[#374151]">
                   <span className="font-semibold text-[#111827]">{sortedDeals.length}</span> live {sortedDeals.length === 1 ? 'deal' : 'deals'} ranked by investment fit
                 </p>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-[#6B7280]">Sort:</label>
-                  <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)}
-                    className="bg-white border border-[#E7E5DD] text-xs font-medium text-[#374151] rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
-                    <option value="investmentFit">Investment Fit</option>
-                    <option value="netYield">Highest net yield</option>
-                    <option value="grossYield">Highest gross yield</option>
-                    <option value="askingPrice">Lowest price</option>
-                    <option value="newest">Newest first</option>
-                  </select>
-                </div>
+                <SortControl sortBy={sortBy} onChange={setSortBy} />
               </div>
 
-              {/* Deal grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
                 {sortedDeals.map(deal => (
-                  <DealCard
-                    key={deal.id}
-                    deal={deal}
-                    isFav={localFavs.has(deal.id)}
-                    isOpening={openingId === deal.id}
+                  <DealCard key={deal.id} deal={deal}
+                    isFav={localFavs.has(deal.id)} isOpening={openingId === deal.id}
                     openError={openErrors[deal.id] ?? null}
                     onToggleFav={() => toggleLocalFav(deal.id)}
-                    onOpen={() => openVerifiedAnalysis(deal)}
-                  />
+                    onOpen={() => openVerifiedAnalysis(deal)} />
                 ))}
               </div>
 
-              {/* Why Investment Fit? */}
               <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
                 <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">How Investment Fit is calculated</h3>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
@@ -741,15 +844,25 @@ export function DealFinder({
 
       {/* ════════════════ CUSTOM SEARCH TAB ════════════════════════════════ */}
       {finderTab === 'custom' && (
-        <div className="space-y-5">
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5">
+        <div className="space-y-6">
 
-            {/* Left: filters */}
-            <div className="space-y-5">
+          {/* Filter card */}
+          <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="font-semibold text-[#111827] text-base" style={{ fontFamily: SERIF }}>Search criteria</h3>
+              {(selectedCustomCities.length > 0 || customMinPrice || customMaxPrice || customPropertyTypes.length || customMinBeds || customMinYield || customMinNetYield || customMinROI) && (
+                <button type="button" onClick={resetCustomFilters}
+                  className="text-xs text-[#9CA3AF] hover:text-[#374151] transition-colors">
+                  Clear all
+                </button>
+              )}
+            </div>
 
-              {/* City multi-select */}
-              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Cities / areas</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+
+              {/* Location */}
+              <div className="md:col-span-2 xl:col-span-3">
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">City / area <span className="text-[#DC2626]">*</span></p>
                 <div className="flex gap-2 flex-wrap">
                   {ALL_CITY_KEYS.map(city => {
                     const isSelected = selectedCustomCities.includes(city)
@@ -765,59 +878,70 @@ export function DealFinder({
                       </button>
                     )
                   })}
-                  {selectedCustomCities.length > 0 && (
-                    <button type="button" onClick={() => setSelectedCustomCities([])}
-                      className="px-3 py-1.5 rounded-full text-xs text-[#9CA3AF] hover:text-[#374151]">Clear all</button>
-                  )}
                 </div>
-                {selectedCustomCities.length === 0 && (
-                  <p className="text-[11px] text-[#9CA3AF] mt-2">Select one or more cities to search for live deals</p>
-                )}
-                {customStatus === 'loading' && (
-                  <div className="flex items-center gap-1.5 mt-2">
-                    <Spinner className="w-3 h-3" />
-                    <p className="text-[11px] text-[#9CA3AF]">Searching live listings…</p>
-                  </div>
+                {!canSearch && (
+                  <p className="text-[11px] text-[#9CA3AF] mt-2">Select at least one city to enable search</p>
                 )}
               </div>
 
-              {/* Asking price range */}
-              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Asking price range</h3>
-                <div className="grid grid-cols-2 gap-4">
+              {/* Asking price */}
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Asking price</p>
+                <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs text-[#6B7280] mb-1.5 block">Min £</label>
+                    <label className="text-xs text-[#6B7280] mb-1 block">Min £</label>
                     <input type="number" step={10000} value={customMinPrice || ''}
                       placeholder="No min"
                       onChange={e => setCustomMinPrice(Number(e.target.value) || 0)}
-                      className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#047857]" />
+                      className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-3 py-2 text-sm outline-none focus:border-[#047857]" />
                   </div>
                   <div>
-                    <label className="text-xs text-[#6B7280] mb-1.5 block">Max £</label>
+                    <label className="text-xs text-[#6B7280] mb-1 block">Max £</label>
                     <input type="number" step={10000} value={customMaxPrice || ''}
                       placeholder="No max"
                       onChange={e => setCustomMaxPrice(Number(e.target.value) || 0)}
-                      className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#047857]" />
+                      className="w-full bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-3 py-2 text-sm outline-none focus:border-[#047857]" />
                   </div>
                 </div>
               </div>
 
-              {/* Min gross yield */}
-              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Minimum gross yield</h3>
-                <div className="flex justify-between text-xs mb-2">
-                  <label className="text-[#6B7280]">Min yield</label>
-                  <span className="font-semibold text-[#047857]">{customMinYield > 0 ? `${customMinYield.toFixed(1)}%` : 'Any'}</span>
+              {/* Yield targets */}
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Yield targets</p>
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <label className="text-[#6B7280]">Min gross yield</label>
+                      <span className="font-semibold text-[#047857]">{customMinYield > 0 ? `${customMinYield.toFixed(1)}%` : 'Any'}</span>
+                    </div>
+                    <input type="range" min={0} max={12} step={0.5} value={customMinYield}
+                      onChange={e => setCustomMinYield(Number(e.target.value))}
+                      className="w-full h-1.5 accent-[#047857]" />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <label className="text-[#6B7280]">Min net yield</label>
+                      <span className="font-semibold text-[#047857]">{customMinNetYield > 0 ? `${customMinNetYield.toFixed(1)}%` : 'Any'}</span>
+                    </div>
+                    <input type="range" min={0} max={10} step={0.5} value={customMinNetYield}
+                      onChange={e => setCustomMinNetYield(Number(e.target.value))}
+                      className="w-full h-1.5 accent-[#047857]" />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <label className="text-[#6B7280]">Min total ROI</label>
+                      <span className="font-semibold text-[#047857]">{customMinROI > 0 ? `${customMinROI.toFixed(1)}%` : 'Any'}</span>
+                    </div>
+                    <input type="range" min={0} max={15} step={0.5} value={customMinROI}
+                      onChange={e => setCustomMinROI(Number(e.target.value))}
+                      className="w-full h-1.5 accent-[#047857]" />
+                  </div>
                 </div>
-                <input type="range" min={0} max={12} step={0.5} value={customMinYield}
-                  onChange={e => setCustomMinYield(Number(e.target.value))}
-                  className="w-full h-1.5 accent-[#047857]" />
-                <div className="flex justify-between text-[10px] text-[#9CA3AF] mt-1"><span>Any</span><span>12%</span></div>
               </div>
 
               {/* Property type */}
-              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Property type</h3>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Property type</p>
                 <div className="flex gap-2 flex-wrap">
                   {['Flat', 'Terraced', 'Semi-Detached', 'Detached', 'Bungalow'].map(t => {
                     const active = customPropertyTypes.includes(t)
@@ -833,26 +957,22 @@ export function DealFinder({
                       </button>
                     )
                   })}
-                  {customPropertyTypes.length > 0 && (
-                    <button type="button" onClick={() => setCustomPropertyTypes([])}
-                      className="px-3 py-1.5 rounded-full text-xs text-[#9CA3AF] hover:text-[#374151]">Clear</button>
-                  )}
                 </div>
               </div>
 
               {/* Bedrooms */}
-              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Bedrooms</h3>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Bedrooms</p>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="text-xs text-[#6B7280] mb-2 block">Min: {customMinBeds === 0 ? 'Any' : customMinBeds}</label>
+                    <label className="text-xs text-[#6B7280] mb-1.5 block">Min: {customMinBeds === 0 ? 'Any' : customMinBeds}</label>
                     <input type="range" min={0} max={5} step={1} value={customMinBeds}
                       onChange={e => setCustomMinBeds(Number(e.target.value))}
                       className="w-full h-1.5 accent-[#047857]" />
                     <div className="flex justify-between text-[10px] text-[#9CA3AF] mt-1"><span>Any</span><span>5+</span></div>
                   </div>
                   <div>
-                    <label className="text-xs text-[#6B7280] mb-2 block">Max: {customMaxBeds >= 6 ? 'Any' : customMaxBeds}</label>
+                    <label className="text-xs text-[#6B7280] mb-1.5 block">Max: {customMaxBeds >= 6 ? 'Any' : customMaxBeds}</label>
                     <input type="range" min={1} max={6} step={1} value={customMaxBeds}
                       onChange={e => setCustomMaxBeds(Number(e.target.value))}
                       className="w-full h-1.5 accent-[#047857]" />
@@ -862,8 +982,8 @@ export function DealFinder({
               </div>
 
               {/* Tenure */}
-              <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Tenure</h3>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Tenure</p>
                 <div className="flex rounded-xl border border-[#E7E5DD] overflow-hidden">
                   {(['any', 'freehold', 'leasehold'] as TenureFilter[]).map(val => (
                     <button key={val} type="button"
@@ -876,108 +996,69 @@ export function DealFinder({
                   ))}
                 </div>
               </div>
+
+              {/* Strategy */}
+              <div className="md:col-span-2 xl:col-span-2">
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Investment strategy</p>
+                <div className="flex gap-2 flex-wrap">
+                  {STRATEGY_OPTIONS.map(s => {
+                    const active = customStrategies.includes(s)
+                    return (
+                      <button key={s} type="button" aria-pressed={active}
+                        onClick={() => setCustomStrategies(prev =>
+                          active ? prev.filter(x => x !== s) : [...prev, s]
+                        )}
+                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                          active ? 'bg-[#B7791F] border-[#B7791F] text-white' : 'bg-white border-[#E7E5DD] text-[#6B7280] hover:border-[#B7791F]'
+                        }`}>
+                        {s}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
             </div>
 
-            {/* Right: results panel */}
-            <div className="space-y-4">
-              <div className="bg-white border border-[#A7F3D0] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
-                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-3">
-                  {selectedCustomCities.length === 0 ? 'Select a city above' :
-                   customStatus === 'loading' ? 'Searching live listings…' :
-                   customStatus === 'unavailable' ? 'Live data unavailable' :
-                   `${customDeals.length} live ${customDeals.length === 1 ? 'deal' : 'deals'} found`}
-                </p>
-
-                {selectedCustomCities.length === 0 ? (
-                  <div className="text-center py-8">
-                    <p className="text-2xl mb-2">🏙</p>
-                    <p className="text-sm text-[#9CA3AF]">Choose a city to find live deals</p>
-                  </div>
-                ) : customStatus === 'loading' ? (
-                  <div className="text-center py-8"><Spinner className="w-6 h-6 mx-auto" /></div>
-                ) : customStatus === 'unavailable' ? (
-                  <div className="text-center py-8">
-                    <p className="text-2xl mb-2">🔌</p>
-                    <p className="text-sm text-[#9CA3AF]">Live listing data not enabled</p>
-                  </div>
-                ) : customDeals.length === 0 ? (
-                  <div className="text-center py-8">
-                    <p className="text-2xl mb-2">🔍</p>
-                    <p className="text-sm text-[#9CA3AF]">No deals match your filters</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {customDeals.slice(0, 6).map(deal => (
-                      <div key={deal.id}
-                        className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[#F3F4F6] hover:border-[#A7F3D0] transition-all cursor-pointer"
-                        onClick={() => openVerifiedAnalysis(deal)}>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold text-[#111827] truncate">{deal.displayAddress || deal.address}</p>
-                          <p className="text-[11px] text-[#9CA3AF]">{[deal.city, deal.postcode].filter(Boolean).join(' · ')}</p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="text-xs font-bold text-[#047857]">{fmtYield(deal.netYield)} net</p>
-                          <p className="text-[10px] text-[#9CA3AF]">{fmtPrice(deal.askingPrice)}</p>
-                        </div>
-                        {openingId === deal.id && <Spinner className="w-4 h-4 shrink-0" />}
-                      </div>
-                    ))}
-                    {customDeals.length > 6 && (
-                      <p className="text-xs text-center text-[#9CA3AF]">+{customDeals.length - 6} more — narrow your filters</p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <button type="button"
-                onClick={() => { setSortBy('investmentFit'); setFinderTab('ai') }}
-                className="w-full bg-white border border-[#E7E5DD] text-[#374151] text-sm font-medium py-3 rounded-xl hover:bg-[#F6F3EC] transition-colors">
-                Save search (coming soon)
+            {/* Search button */}
+            <div className="flex items-center justify-between mt-6 pt-5 border-t border-[#F3F4F6]">
+              <p className="text-xs text-[#9CA3AF]">
+                {canSearch
+                  ? `Searching ${selectedCustomCities.join(', ')}`
+                  : 'Select a city above to enable search'}
+              </p>
+              <button
+                type="button"
+                onClick={runCustomSearch}
+                disabled={!canSearch || customStatus === 'loading'}
+                className="flex items-center gap-2 bg-[#047857] text-white text-sm font-semibold px-6 py-2.5 rounded-xl hover:bg-[#065F46] transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-w-[120px] justify-center">
+                {customStatus === 'loading'
+                  ? <><Spinner className="w-4 h-4" /> Searching…</>
+                  : 'Search →'}
               </button>
             </div>
           </div>
 
-          {/* Full grid for custom results */}
+          {/* Results area */}
+          {customStatus === 'loading' && <LoadingState />}
+          {customStatus === 'unavailable' && <UnavailableState onDiscover={onGoToDiscover} />}
+          {customStatus === 'error' && <ErrorState onRetry={runCustomSearch} />}
+          {customStatus === 'ok' && customDeals.length === 0 && <NoDealsState onReset={resetCustomFilters} />}
           {customStatus === 'ok' && customDeals.length > 0 && (
             <div>
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <p className="text-sm font-semibold text-[#374151]">
-                  <span className="text-[#111827]">{customDeals.length}</span> live {customDeals.length === 1 ? 'deal' : 'deals'}
+              <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                <p className="text-sm text-[#374151]">
+                  <span className="font-semibold text-[#111827]">{customDeals.length}</span> live {customDeals.length === 1 ? 'deal' : 'deals'} found
                 </p>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-[#6B7280]">Sort:</label>
-                  <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)}
-                    className="bg-white border border-[#E7E5DD] text-xs font-medium text-[#374151] rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
-                    <option value="investmentFit">Investment Fit</option>
-                    <option value="netYield">Highest net yield</option>
-                    <option value="grossYield">Highest gross yield</option>
-                    <option value="askingPrice">Lowest price</option>
-                    <option value="newest">Newest first</option>
-                  </select>
-                </div>
+                <SortControl sortBy={sortBy} onChange={setSortBy} />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {[...customDeals]
-                  .sort((a, b) => {
-                    switch (sortBy) {
-                      case 'netYield': return (b.netYield ?? 0) - (a.netYield ?? 0)
-                      case 'grossYield': return (b.grossYield ?? 0) - (a.grossYield ?? 0)
-                      case 'askingPrice': return (a.askingPrice ?? Infinity) - (b.askingPrice ?? Infinity)
-                      case 'newest': return (b.listingDate ?? '').localeCompare(a.listingDate ?? '')
-                      default: return b.investmentFitScore - a.investmentFitScore
-                    }
-                  })
-                  .map(deal => (
-                    <DealCard
-                      key={deal.id}
-                      deal={deal}
-                      isFav={localFavs.has(deal.id)}
-                      isOpening={openingId === deal.id}
-                      openError={openErrors[deal.id] ?? null}
-                      onToggleFav={() => toggleLocalFav(deal.id)}
-                      onOpen={() => openVerifiedAnalysis(deal)}
-                    />
-                  ))}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                {sortDeals(customDeals, sortBy).map(deal => (
+                  <DealCard key={deal.id} deal={deal}
+                    isFav={localFavs.has(deal.id)} isOpening={openingId === deal.id}
+                    openError={openErrors[deal.id] ?? null}
+                    onToggleFav={() => toggleLocalFav(deal.id)}
+                    onOpen={() => openVerifiedAnalysis(deal)} />
+                ))}
               </div>
             </div>
           )}
