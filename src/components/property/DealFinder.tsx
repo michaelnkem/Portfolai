@@ -36,6 +36,65 @@ export interface DealFinderProps {
   onGoToDiscover: () => void
 }
 
+// ── Favourite helpers ─────────────────────────────────────────────────────────
+
+function dealToFavouritePayload(deal: DealCandidate): Record<string, unknown> {
+  // toggleFavourite() in page.tsx reads property.uprn as the dedup key
+  // Fall back to deal.id so listings without a verified UPRN can still be saved
+  const effectiveUprn = deal.uprn ?? deal.id
+  return {
+    property: {
+      uprn: effectiveUprn,
+      full_address: deal.displayAddress || deal.address,
+      address: deal.address,
+      postcode: deal.postcode,
+      property_type: deal.propertyType ?? '',
+      bedrooms: deal.bedrooms ?? null,
+      bathrooms: deal.bathrooms ?? null,
+      tenure: deal.tenure ?? null,
+      last_sold_price: null,
+    },
+    enriched: {
+      estimatedCurrentValue: deal.estimatedMarketValue ?? deal.askingPrice,
+      estimatedRent: deal.rentEstimateMonthly ?? null,
+      grossYield: deal.grossYield ?? null,
+      netYield: deal.netYield ?? null,
+      totalROI: deal.totalROI ?? null,
+      attrBedrooms: deal.bedrooms ?? null,
+      epcRating: deal.epcRating ?? null,
+      valuationMethod: 'listing_asking_price',
+    },
+    epc: deal.epcRating ? { current_energy_rating: deal.epcRating } : {},
+    cityName: deal.city ?? '',
+    _liveListingContext: {
+      sourceContext: 'homedata_live_listing',
+      liveListingAskingPrice: deal.askingPrice,
+      liveListingPriceSource: deal.askingPrice > 0 ? 'asking_price' : null,
+      imageUrl: deal.imageUrl,
+      listingDate: deal.listingDate,
+      listingId: deal.id,
+      listingStatus: deal.listingStatus,
+    },
+  }
+}
+
+function isDealFavourited(
+  deal: DealCandidate,
+  favourites: Set<string>,
+  favouriteItems: Array<Record<string, unknown>>,
+): boolean {
+  const effectiveId = deal.uprn ?? deal.id
+  if (effectiveId && favourites.has(effectiveId)) return true
+  return favouriteItems.some(item => {
+    const p = item.property as Record<string, unknown> | null
+    if (!p) return false
+    if (deal.uprn && p.uprn && String(p.uprn) === deal.uprn) return true
+    const storedAddr = String(p.full_address ?? p.address ?? '')
+    const dealAddr = deal.displayAddress || deal.address
+    return storedAddr.length > 0 && storedAddr === dealAddr && String(p.postcode ?? '') === (deal.postcode ?? '')
+  })
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtPrice(n: number | null | undefined): string {
@@ -500,8 +559,12 @@ function DrillDownCard({
           type="button"
           onClick={e => { e.stopPropagation(); onToggleFav() }}
           aria-label={isFav ? 'Remove from favourites' : 'Add to favourites'}
-          className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#E7E5DD] bg-[#FAF9F5] hover:bg-white transition-colors text-base">
-          <span className={isFav ? 'text-[#B7791F]' : 'text-[#D1D5DB]'}>{isFav ? '★' : '☆'}</span>
+          className={`w-8 h-8 flex items-center justify-center rounded-lg border transition-colors text-base ${
+            isFav
+              ? 'bg-[#FFF7E6] border-[#F5D48A] text-[#B7791F]'
+              : 'bg-[#FAF9F5] border-[#E7E5DD] hover:bg-white text-[#D1D5DB]'
+          }`}>
+          <span>{isFav ? '★' : '☆'}</span>
         </button>
         {openError && (
           <p className="text-[10px] text-[#DC2626] text-center leading-snug">{openError}</p>
@@ -685,6 +748,8 @@ function SortControl({ sortBy, onChange }: { sortBy: SortBy; onChange: (v: SortB
 
 export function DealFinder({
   favouriteItems,
+  favourites,
+  onToggleFavourite,
   onGoToDiscover,
   onOpenAnalysis,
 }: DealFinderProps) {
@@ -841,56 +906,120 @@ export function DealFinder({
 
   // ── Open canonical Property Analysis ─────────────────────────────────────
   const openVerifiedAnalysis = useCallback(async (deal: DealCandidate) => {
-    const cardId = deal.id
-    setOpeningId(cardId)
-    setOpenErrors(prev => { const n = { ...prev }; delete n[cardId]; return n })
+    setOpeningId(deal.id)
+    setOpenErrors(prev => { const n = { ...prev }; delete n[deal.id]; return n })
 
-    let uprn = deal.uprn
     try {
-      if (!uprn) {
-        const searchQ = deal.postcode || deal.displayAddress || deal.address
-        const res = await fetch(`/api/property?q=${encodeURIComponent(searchQ)}`)
-        if (res.ok) {
-          const data = await res.json()
-          const suggestions = (data.suggestions ?? []) as Array<Record<string, unknown>>
-          const match = suggestions.find(s => String(s.uprn ?? '').length > 0)
-          uprn = match ? String(match.uprn ?? '') || null : null
+      let uprn = deal.uprn
+      let resolvedViaSearch = false
+
+      // Step 1 — if no UPRN, attempt to resolve via address search
+      if (!uprn && (deal.displayAddress || deal.postcode)) {
+        try {
+          const searchQuery = [deal.displayAddress, deal.postcode].filter(Boolean).join(' ')
+          const searchRes = await fetch(`/api/property?q=${encodeURIComponent(searchQuery)}`)
+          if (searchRes.ok) {
+            const searchData = await searchRes.json()
+            const suggestions = (searchData.suggestions || []) as Array<Record<string, unknown>>
+            if (suggestions.length > 0 && suggestions[0].uprn) {
+              uprn = String(suggestions[0].uprn)
+              resolvedViaSearch = true
+            }
+          }
+        } catch {
+          // Search failed — continue to partial analysis below
         }
       }
 
-      if (!uprn) {
-        setOpenErrors(prev => ({
-          ...prev,
-          [cardId]: 'Unable to open analysis — this listing could not be matched to a verified property record.',
-        }))
+      // Step 2 — if UPRN found (directly or via search), fetch full analysis
+      if (uprn) {
+        const res = await fetch(`/api/property?uprn=${encodeURIComponent(uprn)}`)
+        if (!res.ok) throw new Error(`Property fetch failed: ${res.status}`)
+        const data = await res.json()
+
+        // Override estimated value with listing asking price
+        if (deal.askingPrice && deal.askingPrice > 0 && data?.enriched) {
+          (data.enriched as Record<string, unknown>).estimatedCurrentValue = deal.askingPrice
+          ;(data.enriched as Record<string, unknown>).valuationMethod = 'listing_asking_price'
+        }
+        // Override property attributes with live listing data where available
+        if (data?.property) {
+          const prop = data.property as Record<string, unknown>
+          if (deal.bedrooms != null) prop.bedrooms = deal.bedrooms
+          if (deal.bathrooms != null) prop.bathrooms = deal.bathrooms
+          if (deal.propertyType) prop.property_type = deal.propertyType
+          if (deal.tenure) prop.tenure = deal.tenure
+          if (deal.epcRating && data.epc) {
+            (data.epc as Record<string, unknown>).current_energy_rating = deal.epcRating
+          }
+        }
+
+        const enrichedData: Record<string, unknown> = {
+          ...data,
+          _liveListingContext: {
+            sourceContext: 'homedata_live_listing',
+            liveListingAskingPrice: deal.askingPrice,
+            liveListingPriceSource: deal.askingPrice > 0 ? 'asking_price' : null,
+            imageUrl: deal.imageUrl,
+            listingDate: deal.listingDate,
+            listingId: deal.id,
+            listingStatus: deal.listingStatus,
+          },
+        }
+        if (resolvedViaSearch) {
+          enrichedData._uprn_notice = `Property data sourced from nearest match on ${deal.displayAddress || deal.postcode}. Transaction history may relate to an adjacent property. Investment metrics are based on local market data and remain accurate.`
+        }
+        onOpenAnalysis(enrichedData)
         return
       }
 
-      const res = await fetch(`/api/property?uprn=${encodeURIComponent(uprn)}`)
-      if (!res.ok) throw new Error(`Analysis request failed: ${res.status}`)
-      const data = await res.json()
-      if (!data?.property) throw new Error('Missing property data')
-
-      // Override estimated value with listing asking price where available
-      if (deal.askingPrice && deal.askingPrice > 0 && data?.enriched) {
-        (data.enriched as Record<string, unknown>).estimatedCurrentValue = deal.askingPrice
-        ;(data.enriched as Record<string, unknown>).valuationMethod = 'listing_asking_price'
-      }
-      // Override property attributes with live listing data where available
-      if (data?.property) {
-        const prop = data.property as Record<string, unknown>
-        if (deal.bedrooms != null) prop.bedrooms = deal.bedrooms
-        if (deal.bathrooms != null) prop.bathrooms = deal.bathrooms
-        if (deal.propertyType) prop.property_type = deal.propertyType
-        if (deal.tenure) prop.tenure = deal.tenure
-        if (deal.epcRating && data.epc) {
-          (data.epc as Record<string, unknown>).current_energy_rating = deal.epcRating
-        }
-      }
-
-      // Merge live listing context so PropertyDetail can use asking price as purchase basis
-      const enrichedData: Record<string, unknown> = {
-        ...data,
+      // Step 3 — no UPRN found, build partial analysis from listing data
+      const cityKey = deal.city as keyof typeof MARKET_DATA.cities
+      const cityData = MARKET_DATA.cities[cityKey] || MARKET_DATA.cities.London
+      const partialData: Record<string, unknown> = {
+        uprn: null,
+        _partial: true,
+        _uprn_notice: `Full property data unavailable for this listing. Investment metrics shown are calculated from the listing details and local market data.`,
+        property: {
+          full_address: deal.displayAddress || deal.address,
+          address: deal.address || deal.displayAddress,
+          postcode: deal.postcode,
+          property_type: deal.propertyType || '',
+          bedrooms: deal.bedrooms,
+          bathrooms: deal.bathrooms,
+          tenure: deal.tenure || '',
+          last_sold_price: null,
+          last_sold_date: null,
+        },
+        epc: deal.epcRating ? { current_energy_rating: deal.epcRating } : null,
+        transactions: [],
+        risks: [],
+        cityData,
+        cityName: deal.city,
+        enriched: {
+          estimatedRent: deal.rentEstimateMonthly,
+          estimatedCurrentValue: deal.askingPrice,
+          valuationMethod: 'listing_asking_price',
+          valuationConfidence: null,
+          grossYield: deal.grossYield,
+          netYield: deal.netYield,
+          netMonthly: deal.rentEstimateMonthly
+            ? Math.round(deal.rentEstimateMonthly * 0.8 - (deal.askingPrice * 0.015 / 12))
+            : null,
+          capitalGrowth: cityData.capitalGrowth1yr,
+          totalROI: deal.netYield
+            ? parseFloat((deal.netYield + cityData.capitalGrowth1yr).toFixed(1))
+            : null,
+          floodRisk: 'Unknown',
+          epcRating: deal.epcRating || 'Unknown',
+          defaults: {
+            serviceCharge: 0,
+            groundRent: 0,
+            managementFee: 10,
+            maintenanceAllowance: 1.5,
+            voidWeeks: 2,
+          },
+        },
         _liveListingContext: {
           sourceContext: 'homedata_live_listing',
           liveListingAskingPrice: deal.askingPrice,
@@ -901,13 +1030,11 @@ export function DealFinder({
           listingStatus: deal.listingStatus,
         },
       }
-      onOpenAnalysis(enrichedData)
-    } catch (err) {
-      console.error('[deal-finder] open analysis failed', err)
-      setOpenErrors(prev => ({
-        ...prev,
-        [cardId]: 'Unable to open analysis. Please try searching for this property manually.',
-      }))
+      onOpenAnalysis(partialData)
+
+    } catch (e) {
+      console.error('[deal-finder] open analysis failed', e)
+      setOpenErrors(prev => ({ ...prev, [deal.id]: 'Unable to load property data. Please try again.' }))
     } finally {
       setOpeningId(null)
     }
@@ -1140,10 +1267,10 @@ export function DealFinder({
                         <DrillDownCard
                           key={deal.id}
                           deal={deal}
-                          isFav={localFavs.has(deal.id)}
+                          isFav={isDealFavourited(deal, favourites, favouriteItems)}
                           isOpening={openingId === deal.id}
                           openError={openErrors[deal.id] ?? null}
-                          onToggleFav={() => toggleLocalFav(deal.id)}
+                          onToggleFav={() => onToggleFavourite(dealToFavouritePayload(deal))}
                           onOpen={() => openVerifiedAnalysis(deal)}
                         />
                       ))}
@@ -1445,10 +1572,10 @@ export function DealFinder({
                         <DrillDownCard
                           key={deal.id}
                           deal={deal}
-                          isFav={localFavs.has(deal.id)}
+                          isFav={isDealFavourited(deal, favourites, favouriteItems)}
                           isOpening={openingId === deal.id}
                           openError={openErrors[deal.id] ?? null}
-                          onToggleFav={() => toggleLocalFav(deal.id)}
+                          onToggleFav={() => onToggleFavourite(dealToFavouritePayload(deal))}
                           onOpen={() => openVerifiedAnalysis(deal)}
                         />
                       ))}
