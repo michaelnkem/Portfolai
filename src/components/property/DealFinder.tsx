@@ -435,36 +435,31 @@ function DrillDownCard({
     ? `Reduced ${relativeDate(deal.updatedAt).replace('Listed ', '')}`
     : relativeDate(deal.listingDate)
 
-  const monthlyCashflow = deal.netYield != null && deal.askingPrice > 0
-    ? Math.round((deal.netYield / 100 * deal.askingPrice) / 12)
-    : null
-
   return (
     <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_4px_16px_rgba(17,24,39,0.04)] hover:border-[#A7F3D0] hover:shadow-[0_8px_24px_rgba(4,120,87,0.08)] transition-all overflow-hidden flex flex-row items-stretch">
 
-      {/* Image — 140px fixed width */}
-      <div className="w-[140px] shrink-0 relative overflow-hidden">
+      {/* Image — 110px fixed width */}
+      <div className="w-[110px] shrink-0 relative overflow-hidden">
         <DealImage imageUrl={deal.imageUrl} propertyType={deal.propertyType} />
-        <div className="absolute top-2 left-2">
+        <div className="absolute top-1.5 left-1.5">
           <OpportunityBadge deal={deal} />
         </div>
       </div>
 
-      {/* Info section */}
-      <div className="flex-1 min-w-0 px-4 py-4 border-r border-[#F3F4F6] flex flex-col justify-between">
+      {/* Info section — flex-1, min-w-0 keeps it from blowing out */}
+      <div className="flex-1 min-w-0 px-3 py-3 border-r border-[#F3F4F6] flex flex-col justify-between">
         <div>
-          <p className="font-semibold text-[#111827] text-[13px] leading-snug mb-1 truncate" style={{ fontFamily: SERIF }}>
-            {deal.displayAddress || deal.address}
+          <p className="font-semibold text-[#111827] text-[12px] leading-snug mb-1 truncate" style={{ fontFamily: SERIF }}>
+            {deal.displayAddress || deal.address || deal.postcode || 'Address unavailable'}
           </p>
-          <div className="flex items-center gap-1.5 mb-2.5 flex-wrap">
+          <div className="flex items-center gap-1 mb-2 flex-wrap">
             {deal.postcode && (
-              <span className="text-[10px] font-semibold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded-full shrink-0">
+              <span className="text-[9px] font-semibold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded-full shrink-0">
                 {deal.postcode}
               </span>
             )}
-            {deal.city && <span className="text-[11px] text-[#6B7280] truncate">{deal.city}</span>}
             {dateLabel && (
-              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0 ${
+              <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0 ${
                 deal.listingStatus === 'new_listing' ? 'bg-[#ECFDF5] text-[#047857]' :
                 deal.listingStatus === 'reduced' ? 'bg-[#EFF6FF] text-[#1D4ED8]' :
                 'bg-[#F6F3EC] text-[#9CA3AF]'
@@ -474,95 +469,81 @@ function DrillDownCard({
             )}
           </div>
           <div className="flex items-center gap-1 flex-wrap">
-            {deal.propertyType && (
-              <span className="text-[10px] bg-[#F6F3EC] text-[#374151] px-2 py-0.5 rounded-full">{deal.propertyType}</span>
-            )}
             {deal.bedrooms != null && (
-              <span className="text-[10px] bg-[#F6F3EC] text-[#374151] px-2 py-0.5 rounded-full">{deal.bedrooms} bed</span>
+              <span className="text-[9px] bg-[#F6F3EC] text-[#374151] px-1.5 py-0.5 rounded-full">{deal.bedrooms}bd</span>
             )}
             {deal.bathrooms != null && (
-              <span className="text-[10px] bg-[#F6F3EC] text-[#374151] px-2 py-0.5 rounded-full">{deal.bathrooms} bath</span>
+              <span className="text-[9px] bg-[#F6F3EC] text-[#374151] px-1.5 py-0.5 rounded-full">{deal.bathrooms}ba</span>
             )}
-            {deal.tenure && (
-              <span className="text-[10px] bg-[#F6F3EC] text-[#6B7280] px-2 py-0.5 rounded-full capitalize">{deal.tenure}</span>
+            {deal.propertyType && (
+              <span className="text-[9px] bg-[#F6F3EC] text-[#374151] px-1.5 py-0.5 rounded-full truncate max-w-[60px]">{deal.propertyType}</span>
             )}
             {deal.epcRating && (
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#F6F3EC] ${epcColor}`}>
-                EPC {deal.epcRating}
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#F6F3EC] ${epcColor}`}>
+                {deal.epcRating}
               </span>
             )}
           </div>
         </div>
         {deal.investmentReasons.length > 0 && (
-          <p className="text-[10px] text-[#6B7280] mt-2 line-clamp-1">{deal.investmentReasons[0]}</p>
+          <p className="text-[9px] text-[#6B7280] mt-1.5 line-clamp-1">{deal.investmentReasons[0]}</p>
         )}
       </div>
 
-      {/* Financial metrics — 6 columns */}
+      {/* Financial metrics — 5 columns (no Cashflow), tighter widths */}
       <div className="hidden sm:flex divide-x divide-[#F3F4F6] shrink-0">
         {/* Asking Price */}
-        <div className="flex flex-col items-center justify-center py-4 px-3 text-center min-w-[100px]">
-          <p className="text-[9px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Asking Price</p>
-          <p className="text-sm font-bold text-[#111827] leading-none" style={{ fontFamily: SERIF }}>
+        <div className="flex flex-col items-center justify-center py-3 px-2 text-center min-w-[78px]">
+          <p className="text-[8px] uppercase tracking-[0.06em] text-[#9CA3AF] mb-1">Price</p>
+          <p className="text-[11px] font-bold text-[#111827] leading-none" style={{ fontFamily: SERIF }}>
             {fmtPrice(deal.askingPrice)}
           </p>
           {deal.previousAskingPrice && deal.previousAskingPrice !== deal.askingPrice && (
-            <p className="text-[9px] text-[#9CA3AF] line-through mt-0.5">{fmtPrice(deal.previousAskingPrice)}</p>
-          )}
-          {deal.estimatedMarketValue && deal.estimatedMarketValue > 0 && (
-            <p className="text-[9px] text-[#9CA3AF] mt-0.5">MV {fmtPrice(deal.estimatedMarketValue)}</p>
+            <p className="text-[8px] text-[#9CA3AF] line-through mt-0.5">{fmtPrice(deal.previousAskingPrice)}</p>
           )}
         </div>
         {/* Net Yield */}
-        <div className="flex flex-col items-center justify-center py-4 px-3 text-center min-w-[80px]">
-          <p className="text-[9px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Net Yield</p>
-          <p className={`text-sm font-bold leading-none ${(deal.netYield ?? 0) >= 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
+        <div className="flex flex-col items-center justify-center py-3 px-2 text-center min-w-[60px]">
+          <p className="text-[8px] uppercase tracking-[0.06em] text-[#9CA3AF] mb-1">Net Yld</p>
+          <p className={`text-[11px] font-bold leading-none ${(deal.netYield ?? 0) >= 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
             style={{ fontFamily: SERIF }}>
             {fmtYield(deal.netYield)}
           </p>
         </div>
         {/* Gross Yield */}
-        <div className="flex flex-col items-center justify-center py-4 px-3 text-center min-w-[80px]">
-          <p className="text-[9px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Gross Yield</p>
-          <p className="text-sm font-bold text-[#111827] leading-none" style={{ fontFamily: SERIF }}>
+        <div className="flex flex-col items-center justify-center py-3 px-2 text-center min-w-[60px]">
+          <p className="text-[8px] uppercase tracking-[0.06em] text-[#9CA3AF] mb-1">Gross Yld</p>
+          <p className="text-[11px] font-bold text-[#111827] leading-none" style={{ fontFamily: SERIF }}>
             {fmtYield(deal.grossYield)}
           </p>
         </div>
         {/* Total ROI */}
-        <div className="flex flex-col items-center justify-center py-4 px-3 text-center min-w-[80px]">
-          <p className="text-[9px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Total ROI</p>
-          <p className={`text-sm font-bold leading-none ${(deal.totalROI ?? 0) >= 7 ? 'text-[#047857]' : 'text-[#111827]'}`}
+        <div className="flex flex-col items-center justify-center py-3 px-2 text-center min-w-[58px]">
+          <p className="text-[8px] uppercase tracking-[0.06em] text-[#9CA3AF] mb-1">ROI</p>
+          <p className={`text-[11px] font-bold leading-none ${(deal.totalROI ?? 0) >= 7 ? 'text-[#047857]' : 'text-[#111827]'}`}
             style={{ fontFamily: SERIF }}>
             {deal.totalROI != null ? `${deal.totalROI > 0 ? '+' : ''}${deal.totalROI.toFixed(1)}%` : '—'}
           </p>
         </div>
-        {/* Monthly Cashflow */}
-        <div className="flex flex-col items-center justify-center py-4 px-3 text-center min-w-[90px]">
-          <p className="text-[9px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Cashflow</p>
-          <p className={`text-sm font-bold leading-none ${monthlyCashflow != null && monthlyCashflow > 0 ? 'text-[#047857]' : monthlyCashflow != null && monthlyCashflow < 0 ? 'text-[#DC2626]' : 'text-[#111827]'}`}
-            style={{ fontFamily: SERIF }}>
-            {monthlyCashflow != null ? `${monthlyCashflow > 0 ? '+' : ''}£${Math.abs(monthlyCashflow).toLocaleString()}/mo` : '—'}
-          </p>
-        </div>
         {/* Est. Rent */}
-        <div className="flex flex-col items-center justify-center py-4 px-3 text-center min-w-[90px]">
-          <p className="text-[9px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Est. Rent</p>
-          <p className="text-sm font-bold text-[#111827] leading-none" style={{ fontFamily: SERIF }}>
+        <div className="flex flex-col items-center justify-center py-3 px-2 text-center min-w-[70px]">
+          <p className="text-[8px] uppercase tracking-[0.06em] text-[#9CA3AF] mb-1">Est. Rent</p>
+          <p className="text-[11px] font-bold text-[#111827] leading-none" style={{ fontFamily: SERIF }}>
             {fmtRent(deal.rentEstimateMonthly)}
           </p>
         </div>
       </div>
 
-      {/* Fit score + CTA */}
-      <div className="flex flex-col items-center justify-center gap-3 px-4 py-4 shrink-0 min-w-[140px] border-l border-[#F3F4F6]">
-        <span className={`text-xs font-bold px-3 py-1.5 rounded-full ${fitBg}`}>
-          {deal.investmentFitScore}% · {deal.investmentFitLabel}
+      {/* Fit score + CTA — 116px */}
+      <div className="flex flex-col items-center justify-center gap-2 px-3 py-3 shrink-0 min-w-[116px] border-l border-[#F3F4F6]">
+        <span className={`text-[9px] font-bold px-2 py-1 rounded-full text-center leading-tight ${fitBg}`}>
+          {deal.investmentFitScore}%<br />{deal.investmentFitLabel}
         </span>
         <button
           type="button"
           onClick={e => { e.stopPropagation(); onToggleFav() }}
           aria-label={isFav ? 'Remove from favourites' : 'Add to favourites'}
-          className={`w-8 h-8 flex items-center justify-center rounded-lg border transition-colors text-base ${
+          className={`w-7 h-7 flex items-center justify-center rounded-lg border transition-colors text-sm ${
             isFav
               ? 'bg-[#FFF7E6] border-[#F5D48A] text-[#B7791F]'
               : 'bg-[#FAF9F5] border-[#E7E5DD] hover:bg-white text-[#D1D5DB]'
@@ -570,14 +551,14 @@ function DrillDownCard({
           <span>{isFav ? '★' : '☆'}</span>
         </button>
         {openError && (
-          <p className="text-[10px] text-[#DC2626] text-center leading-snug">{openError}</p>
+          <p className="text-[9px] text-[#DC2626] text-center leading-snug">{openError}</p>
         )}
         <button
           type="button"
           onClick={onOpen}
           disabled={isOpening}
-          className="w-full bg-[#047857] text-white text-xs font-semibold px-3 py-2 rounded-xl hover:bg-[#065F46] transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5">
-          {isOpening ? <><Spinner className="w-3 h-3" />Loading…</> : 'View Deal →'}
+          className="w-full bg-[#047857] text-white text-[10px] font-semibold px-2 py-1.5 rounded-xl hover:bg-[#065F46] transition-colors disabled:opacity-60 flex items-center justify-center gap-1">
+          {isOpening ? <><Spinner className="w-2.5 h-2.5" />Loading…</> : 'View Deal →'}
         </button>
       </div>
 
