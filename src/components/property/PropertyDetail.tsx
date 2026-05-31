@@ -647,6 +647,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                                     ...freshData,
                                     _uprn_suggestions: activeData._uprn_suggestions,
                                     _uprn_notice: `Showing analysis for ${s.full_address || s.address} — select another property below to compare.`,
+                                    _agent_contact: activeData._agent_contact,
                                   })
                                   setTab('overview')
                                 } catch { /* silent fail */ }
@@ -746,11 +747,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                         )
                       ) : (
                         <>
-                          {confidenceScore && (
-                            <span className="bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] text-[11px] font-semibold px-2 py-0.5 rounded-full">
-                              {confidenceScore}% confidence
-                            </span>
-                          )}
                           {bedroomsOverride !== null ? (
                             <p className="text-xs text-[#047857] font-medium">Recalculated using corrected bedroom count</p>
                           ) : price && p?.last_sold_date ? (
@@ -822,10 +818,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     ✓ High confidence · Based on {comparablesCount} local transaction{comparablesCount !== 1 ? 's' : ''}
                   </span>
                 )}
-                <span className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280] bg-white border border-[#E7E5DD] px-3 py-1 rounded-full">
-                  📊 Data quality: {dataQuality}%
-                </span>
-                <span className="inline-flex items-center text-[11px] text-[#9CA3AF]">
+<span className="inline-flex items-center text-[11px] text-[#9CA3AF]">
                   {localMarketType}
                 </span>
               </div>
