@@ -38,6 +38,7 @@ export interface DealCandidate {
   investmentReasons: string[]
   badge: string
   badgeColour: string
+  agentName: string | null
   dataConfidence: number
   source: 'homedata_live_listings'
 }
@@ -430,7 +431,7 @@ function normaliseListing(
   const id = uprn ?? listingId ?? `dl-${Math.random().toString(36).slice(2)}`
 
   const displayAddress = String(raw.display_address ?? '').trim()
-  const address        = displayAddress  // live listings use display_address as canonical address
+  const address        = displayAddress || String(raw.postcode ?? '').trim()
 
   // Try to extract postcode from display_address; fall back to raw.postcode field if present
   const extractedPostcode = extractPostcode(displayAddress)
@@ -528,8 +529,28 @@ function normaliseListing(
     investmentReasons: fit.reasons,
     badge: fit.badge,
     badgeColour: fit.badgeColour,
+    agentName: raw.agent_name ? String(raw.agent_name) : null,
     dataConfidence: dataFields,
     source: 'homedata_live_listings',
+  }
+}
+
+// ── Postcode fallback for missing street names ────────────────────────────────
+
+async function resolveStreetFromPostcode(postcode: string): Promise<string> {
+  if (!postcode) return ''
+  try {
+    const res = await fetch(
+      `https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`,
+      { cache: 'no-store' },
+    )
+    if (!res.ok) return ''
+    const data = await res.json() as { result?: Record<string, unknown> }
+    const r = data?.result
+    if (!r) return ''
+    return String(r.parish || r.admin_ward || r.parliamentary_constituency || '')
+  } catch {
+    return ''
   }
 }
 
@@ -649,6 +670,18 @@ export async function GET(req: NextRequest) {
     let deals = deduped
       .map(({ listing, sourceCityHint }) => normaliseListing(listing, sourceCityHint, bench))
       .filter((d): d is DealCandidate => d !== null)
+
+    // Resolve missing display addresses via postcodes.io
+    deals = await Promise.all(
+      deals.map(async d => {
+        if (d.displayAddress && d.displayAddress.length > 0) return d
+        const area = await resolveStreetFromPostcode(d.postcode)
+        return {
+          ...d,
+          displayAddress: area ? `${d.postcode} · ${area}` : d.postcode || 'Address unavailable',
+        }
+      })
+    )
 
     // Server-side yield/netYield filter
     if (p.minYield) {
