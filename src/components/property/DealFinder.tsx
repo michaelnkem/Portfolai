@@ -442,8 +442,8 @@ function DrillDownCard({
   return (
     <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_4px_16px_rgba(17,24,39,0.04)] hover:border-[#A7F3D0] hover:shadow-[0_8px_24px_rgba(4,120,87,0.08)] transition-all overflow-hidden flex flex-row items-stretch">
 
-      {/* Image — 180px fixed width */}
-      <div className="w-[180px] shrink-0 relative overflow-hidden">
+      {/* Image — 140px fixed width */}
+      <div className="w-[140px] shrink-0 relative overflow-hidden">
         <DealImage imageUrl={deal.imageUrl} propertyType={deal.propertyType} />
         <div className="absolute top-2 left-2">
           <OpportunityBadge deal={deal} />
@@ -453,18 +453,18 @@ function DrillDownCard({
       {/* Info section */}
       <div className="flex-1 min-w-0 px-4 py-4 border-r border-[#F3F4F6] flex flex-col justify-between">
         <div>
-          <p className="font-semibold text-[#111827] text-[14px] leading-snug mb-1" style={{ fontFamily: SERIF }}>
+          <p className="font-semibold text-[#111827] text-[13px] leading-snug mb-1 truncate" style={{ fontFamily: SERIF }}>
             {deal.displayAddress || deal.address}
           </p>
-          <div className="flex items-center gap-1.5 flex-wrap mb-2.5">
+          <div className="flex items-center gap-1.5 mb-2.5 flex-wrap">
             {deal.postcode && (
-              <span className="text-[10px] font-semibold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded-full">
+              <span className="text-[10px] font-semibold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-1.5 py-0.5 rounded-full shrink-0">
                 {deal.postcode}
               </span>
             )}
-            {deal.city && <span className="text-[11px] text-[#6B7280]">{deal.city}</span>}
+            {deal.city && <span className="text-[11px] text-[#6B7280] truncate">{deal.city}</span>}
             {dateLabel && (
-              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0 ${
                 deal.listingStatus === 'new_listing' ? 'bg-[#ECFDF5] text-[#047857]' :
                 deal.listingStatus === 'reduced' ? 'bg-[#EFF6FF] text-[#1D4ED8]' :
                 'bg-[#F6F3EC] text-[#9CA3AF]'
@@ -1288,7 +1288,7 @@ export function DealFinder({
                       <p className="text-sm text-[#9CA3AF]">No deals match this filter</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {drillDownDeals.map(deal => (
                         <DrillDownCard
                           key={deal.id}
@@ -1593,7 +1593,7 @@ export function DealFinder({
                       <p className="text-sm text-[#9CA3AF]">No deals match this filter</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {drillDownDeals.map(deal => (
                         <DrillDownCard
                           key={deal.id}
