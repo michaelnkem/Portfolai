@@ -20,7 +20,7 @@ interface PropertyDetailProps {
   inline?: boolean
 }
 
-type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'market'
+type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'market' | 'agent'
 
 const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
 
@@ -127,6 +127,7 @@ function AddToDropdown({
 export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavourite, onHome, onMarketIntel, onSearchProperty, isSaved = false, isFavourite = false, inline = false }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
   const [pickerOverride, setPickerOverride] = useState<Record<string, unknown> | null>(null)
+  const [selectedUprnOverride, setSelectedUprnOverride] = useState<string | null>(null)
   const [rent, setRent] = useState<number>(0)
   const [deposit, setDeposit] = useState(0)
   const [mortRate, setMortRate] = useState(4.8)
@@ -180,6 +181,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
     ? (Number(liveListingCtx.liveListingAskingPrice ?? 0) || 0)
     : 0
   const isLiveListing = liveAskingPrice > 0
+  const liveAgentName = isLiveListing && liveListingCtx?.agentName
+    ? String(liveListingCtx.agentName)
+    : null
 
   // propType needed before estimatedCurrentValue recalc
   const propType = String(p?.property_type ?? '')
@@ -440,6 +444,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
     { id: 'history',    label: 'History'            },
     { id: 'risks',      label: 'Risks'              },
     { id: 'market',     label: 'Market Comparison'  },
+    ...(isLiveListing ? [{ id: 'agent' as DetailTab, label: 'Agent Contact' }] : []),
   ]
 
   const epcColor = !epcKnown ? 'text-[#D1D5DB]'
@@ -638,17 +643,20 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                                   if (srcEnriched?.estimatedCurrentValue && freshData.enriched) {
                                     (freshData.enriched as Record<string, unknown>).estimatedCurrentValue = srcEnriched.estimatedCurrentValue
                                   }
-                                  freshData._uprn_notice = `Showing analysis for ${s.full_address || s.address}`
-                                  freshData._uprn_suggestions = null
+                                  freshData._uprn_notice = `Showing analysis for ${s.full_address || s.address} — select another property below to compare.`
+                                  freshData._uprn_suggestions = (data as Record<string, unknown>)._uprn_suggestions
                                   setPickerOverride(freshData)
+                                  setSelectedUprnOverride(s.uprn)
                                 } catch { /* silent fail */ }
                               }}
                               className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium border transition-all duration-200 hover:shadow-sm active:scale-[0.98] ${
-                                i === 0
+                                selectedUprnOverride === s.uprn || (!selectedUprnOverride && i === 0)
                                   ? 'bg-[#047857] border-[#047857] text-white hover:bg-[#065F46]'
                                   : 'bg-white border-[#E7E5DD] text-[#374151] hover:border-[#A7F3D0] hover:text-[#047857]'
                               }`}>
-                              {i === 0 && <span className="text-[10px] opacity-75">Current</span>}
+                              {(selectedUprnOverride === s.uprn || (!selectedUprnOverride && i === 0)) && (
+                                <span className="text-[10px] opacity-75">Current</span>
+                              )}
                               <span className="truncate max-w-[180px]">
                                 {s.full_address || s.address || s.postcode}
                               </span>
@@ -1561,6 +1569,88 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 propertyBeds={propertyBeds}
                 fullWidth
               />
+            )}
+
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* AGENT CONTACT TAB                                               */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {tab === 'agent' && (
+              <div className="max-w-2xl space-y-5">
+
+                {/* Agent card */}
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] overflow-hidden">
+                  <div className="px-6 py-5 border-b border-[#F3F4F6]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Estate Agent</p>
+                    <p className="text-xl font-bold text-[#111827]" style={{ fontFamily: SERIF }}>
+                      {liveAgentName ?? 'Agent details unavailable'}
+                    </p>
+                    {liveListingCtx?.listingDate && (
+                      <p className="text-xs text-[#9CA3AF] mt-1">
+                        Listed {new Date(String(liveListingCtx.listingDate)).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Contact action buttons */}
+                  {liveAgentName && (
+                    <div className="px-6 py-5 space-y-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Find this agent</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <a
+                          href={`https://www.rightmove.co.uk/estate-agents/find.html?searchLocation=${encodeURIComponent(postcode || address)}&agentName=${encodeURIComponent(liveAgentName)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center gap-2 bg-[#E7201D] text-white text-sm font-semibold px-4 py-3 rounded-xl hover:opacity-90 transition-opacity">
+                          <span>Search on Rightmove</span>
+                          <span className="text-xs opacity-75">↗</span>
+                        </a>
+                        <a
+                          href={`https://www.zoopla.co.uk/find-agents/estate-agents/branch/?q=${encodeURIComponent((postcode || address) + ' ' + liveAgentName)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center gap-2 bg-[#7F3F98] text-white text-sm font-semibold px-4 py-3 rounded-xl hover:opacity-90 transition-opacity">
+                          <span>Search on Zoopla</span>
+                          <span className="text-xs opacity-75">↗</span>
+                        </a>
+                        <a
+                          href={`https://www.google.com/search?q=${encodeURIComponent(liveAgentName + ' estate agent ' + (postcode || cityName || ''))}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="sm:col-span-2 flex items-center justify-center gap-2 bg-white border border-[#E7E5DD] text-[#374151] text-sm font-semibold px-4 py-3 rounded-xl hover:border-[#047857] hover:text-[#047857] transition-colors">
+                          <span>Google this agent</span>
+                          <span className="text-xs opacity-50">↗</span>
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Listing details */}
+                <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] px-6 py-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Listing details</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {[
+                      { label: 'Listing status', value: liveListingCtx?.listingStatus ? String(liveListingCtx.listingStatus).replace(/_/g, ' ') : '—' },
+                      { label: 'Asking price', value: liveAskingPrice > 0 ? `£${liveAskingPrice.toLocaleString()}` : '—' },
+                      { label: 'Date listed', value: liveListingCtx?.listingDate ? new Date(String(liveListingCtx.listingDate)).toLocaleDateString('en-GB') : '—' },
+                      { label: 'Listing ID', value: liveListingCtx?.listingId ? String(liveListingCtx.listingId) : '—' },
+                    ].map(row => (
+                      <div key={row.label}>
+                        <p className="text-[10px] uppercase tracking-[0.06em] text-[#9CA3AF] mb-0.5">{row.label}</p>
+                        <p className="text-sm font-semibold text-[#111827] capitalize">{row.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Note */}
+                <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-3">
+                  <p className="text-[12px] text-[#9CA3AF] leading-relaxed">
+                    Direct phone numbers and email addresses are not available from this data source. Use the links above to locate the agent branch and request a viewing or ask for the seller&apos;s preferred contact method.
+                  </p>
+                </div>
+
+              </div>
             )}
 
           </div>
