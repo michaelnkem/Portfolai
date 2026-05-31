@@ -1,17 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const VARIANTS = [
-  'https://api.homedata.co.uk/api',
-  'https://api.homedata.co.uk',
-  'https://homedata.co.uk/api',
-]
+const BASE = 'https://api.homedata.co.uk/api'
 
-async function probe(baseUrl: string, path: string, apiKey: string) {
-  const url = `${baseUrl}${path}`
+async function probe(url: string, apiKey: string) {
   try {
     const res = await fetch(url, { headers: { Authorization: `Api-Key ${apiKey}`, Accept: 'application/json' }, cache: 'no-store' })
     const body = await res.text().catch(() => '')
-    return { url, status: res.status, ok: res.ok, body: body.slice(0, 500) }
+    return { url, status: res.status, ok: res.ok, body: body.slice(0, 800) }
   } catch (err) {
     return { url, status: 0, ok: false, body: String(err) }
   }
@@ -22,40 +17,40 @@ export async function GET(req: NextRequest) {
   if (!apiKey) return NextResponse.json({ error: 'HOMEDATA_API_KEY not set' }, { status: 500 })
 
   const location = req.nextUrl.searchParams.get('location') || 'Manchester'
-  const boundaryPath = `/boundaries/autocomplete/?q=${encodeURIComponent(location)}`
-  const boundaryProbes = await Promise.all(VARIANTS.map(base => probe(base, boundaryPath, apiKey)))
-  const workingBoundary = boundaryProbes.find(p => p.ok)
 
-  let listingProbes: typeof boundaryProbes = []
-  let boundaryId: string | null = null
+  // Step 1 - boundary lookup
+  const boundaryUrl = `${BASE}/boundaries/autocomplete/?q=${encodeURIComponent(location)}`
+  const boundaryResult = await probe(boundaryUrl, apiKey)
 
-  if (workingBoundary) {
-    try {
-      const parsed = JSON.parse(workingBoundary.body) as Record<string, unknown>
-      const results = Array.isArray(parsed.results) ? parsed.results as Record<string, unknown>[] : []
-      boundaryId = results[0]?.id != null ? String(results[0].id) : null
-    } catch {}
+  let boundaryId: number | null = null
+  let boundaryName: string | null = null
+  try {
+    const parsed = JSON.parse(boundaryResult.body)
+    const first = parsed?.results?.[0]
+    if (first?.id) { boundaryId = Number(first.id); boundaryName = String(first.display_name) }
+  } catch {}
 
-    if (boundaryId) {
-      const listingPath = `/live-listings/search/?boundary_id=${boundaryId}&transaction_type=Sale&page_size=3`
-      const workingBase = VARIANTS.find(b => workingBoundary.url.startsWith(b)) ?? VARIANTS[0]
-      listingProbes = [await probe(workingBase, listingPath, apiKey)]
-    }
+  // Step 2 - listings using boundary ID
+  let listingsResult = null
+  if (boundaryId) {
+    const listingsUrl = `${BASE}/live-listings/search/?boundary_id=${boundaryId}&transaction_type=Sale&page_size=5`
+    listingsResult = await probe(listingsUrl, apiKey)
   }
 
+  // Step 3 - also try properties endpoint as alternative
+  const propertiesUrl = `${BASE}/properties/?location=${encodeURIComponent(location)}&page_size=3`
+  const propertiesResult = await probe(propertiesUrl, apiKey)
+
   return NextResponse.json({
-    apiKeyPresent: true,
     apiKeyPrefix: `${apiKey.slice(0, 6)}…`,
     location,
-    boundaryProbes: boundaryProbes.map(p => ({ url: p.url, status: p.status, ok: p.ok, bodyPreview: p.body.slice(0, 200) })),
-    resolvedBoundaryId: boundaryId,
-    listingProbes: listingProbes.map(p => ({ url: p.url, status: p.status, ok: p.ok, bodyPreview: p.body.slice(0, 300) })),
-    diagnosis: workingBoundary
-      ? boundaryId
-        ? listingProbes[0]?.ok
-          ? 'All good — boundary and listings both working'
-          : `Boundary OK (id=${boundaryId}) but live-listings call failed: ${listingProbes[0]?.status}`
-        : 'Boundary endpoint responded but returned no results'
-      : `All boundary URL variants failed. Statuses: ${boundaryProbes.map(p => p.status).join(', ')}`,
+    boundary: { status: boundaryResult.status, id: boundaryId, name: boundaryName },
+    listings: listingsResult ? { status: listingsResult.status, ok: listingsResult.ok, body: listingsResult.body } : 'skipped — no boundary ID',
+    propertiesEndpoint: { status: propertiesResult.status, ok: propertiesResult.ok, body: propertiesResult.body },
+    diagnosis: boundaryId
+      ? listingsResult?.ok
+        ? 'All working — boundary and listings both responding'
+        : `Boundary ID ${boundaryId} found but listings call returned ${listingsResult?.status}`
+      : 'Boundary lookup succeeded but ID extraction failed',
   })
 }
