@@ -919,11 +919,12 @@ export function DealFinder({
   const canSearch = selectedCustomCities.length > 0
 
   const drillDownDeals = useMemo(() => {
+    const source = finderTab === 'custom' ? customDeals : aiDeals
     if (!kpiFilter) return []
-    if (kpiFilter === 'topDeals') return aiDeals.filter(d => d.investmentFitScore >= 85)
-    if (kpiFilter === 'newListings') return aiDeals.filter(d => d.listingStatus === 'new_listing')
+    if (kpiFilter === 'topDeals') return source.filter(d => d.investmentFitScore >= 85)
+    if (kpiFilter === 'newListings') return source.filter(d => d.listingStatus === 'new_listing')
     return []
-  }, [kpiFilter, aiDeals])
+  }, [kpiFilter, aiDeals, customDeals, finderTab])
 
   const handleKpiClick = (filter: 'topDeals' | 'newListings') => {
     setKpiFilter(prev => prev === filter ? null : filter)
@@ -956,7 +957,7 @@ export function DealFinder({
       {/* KPI row */}
       {activeMeta && activeStatus === 'ok' && (
         <KpiRow
-          meta={aiMeta}
+          meta={finderTab === 'custom' ? customMeta : aiMeta}
           onTopDealsClick={() => handleKpiClick('topDeals')}
           onNewListingsClick={() => handleKpiClick('newListings')}
           activeFilter={kpiFilter}
