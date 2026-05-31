@@ -598,6 +598,15 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 <span>Back to Properties</span>
               </button>
 
+              {(data as Record<string, unknown>)._uprn_notice && (
+                <div className="flex items-start gap-3 bg-[#FFF7E6] border border-[#F5D48A] rounded-xl px-4 py-3 mb-5">
+                  <span className="text-[#B7791F] text-base shrink-0 mt-0.5">⚠</span>
+                  <p className="text-[13px] text-[#92400E] leading-relaxed">
+                    {String((data as Record<string, unknown>)._uprn_notice)}
+                  </p>
+                </div>
+              )}
+
               <div className="flex items-start justify-between gap-6 flex-wrap">
                 <div className="min-w-0 flex-1">
                   <h1 className="text-[32px] sm:text-[40px] font-bold text-[#111827] leading-[1.08] mb-3"
