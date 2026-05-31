@@ -126,6 +126,7 @@ function AddToDropdown({
 
 export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavourite, onHome, onMarketIntel, onSearchProperty, isSaved = false, isFavourite = false, inline = false }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
+  const [pickerOverride, setPickerOverride] = useState<Record<string, unknown> | null>(null)
   const [rent, setRent] = useState<number>(0)
   const [deposit, setDeposit] = useState(0)
   const [mortRate, setMortRate] = useState(4.8)
@@ -598,14 +599,70 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 <span>Back to Properties</span>
               </button>
 
-              {(data as Record<string, unknown>)._uprn_notice && (
-                <div className="flex items-start gap-3 bg-[#FFF7E6] border border-[#F5D48A] rounded-xl px-4 py-3 mb-5">
-                  <span className="text-[#B7791F] text-base shrink-0 mt-0.5">⚠</span>
-                  <p className="text-[13px] text-[#92400E] leading-relaxed">
-                    {String((data as Record<string, unknown>)._uprn_notice)}
-                  </p>
-                </div>
-              )}
+              {(() => {
+                const nd = pickerOverride ?? (data as Record<string, unknown>)
+                if (!nd._uprn_notice) return null
+                type Suggestion = { uprn: string; full_address: string; address: string; postcode: string }
+                const suggestions = Array.isArray(nd._uprn_suggestions)
+                  ? (nd._uprn_suggestions as Suggestion[])
+                  : null
+                return (
+                  <div className="mb-6 overflow-hidden rounded-2xl border border-[#F5D48A] bg-[#FFFBF0] shadow-[0_2px_8px_rgba(184,120,32,0.06)]"
+                    style={{ animation: 'slideDown 0.3s ease' }}>
+                    {/* Notice row */}
+                    <div className="flex items-start gap-3 px-5 py-4">
+                      <span className="text-[#B7791F] text-sm shrink-0 mt-0.5">⚠</span>
+                      <p className="text-[13px] text-[#92400E] leading-relaxed flex-1">
+                        {String(nd._uprn_notice)}
+                      </p>
+                    </div>
+                    {/* Inline picker — only when 4+ suggestions exist */}
+                    {suggestions && suggestions.length >= 4 && (
+                      <div className="border-t border-[#F5D48A]/60 px-5 pb-4 pt-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[#B7791F] mb-3">
+                          Select property to refine analysis
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {suggestions.slice(0, 6).map((s, i) => (
+                            <button
+                              key={s.uprn}
+                              type="button"
+                              onClick={async () => {
+                                if (!s.uprn) return
+                                try {
+                                  const res = await fetch(`/api/property?uprn=${s.uprn}`)
+                                  if (!res.ok) return
+                                  const freshData = await res.json() as Record<string, unknown>
+                                  // Preserve asking price override from original data
+                                  const srcEnriched = (data as Record<string, unknown>).enriched as Record<string, unknown> | null
+                                  if (srcEnriched?.estimatedCurrentValue && freshData.enriched) {
+                                    (freshData.enriched as Record<string, unknown>).estimatedCurrentValue = srcEnriched.estimatedCurrentValue
+                                  }
+                                  freshData._uprn_notice = `Showing analysis for ${s.full_address || s.address}`
+                                  freshData._uprn_suggestions = null
+                                  setPickerOverride(freshData)
+                                } catch { /* silent fail */ }
+                              }}
+                              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium border transition-all duration-200 hover:shadow-sm active:scale-[0.98] ${
+                                i === 0
+                                  ? 'bg-[#047857] border-[#047857] text-white hover:bg-[#065F46]'
+                                  : 'bg-white border-[#E7E5DD] text-[#374151] hover:border-[#A7F3D0] hover:text-[#047857]'
+                              }`}>
+                              {i === 0 && <span className="text-[10px] opacity-75">Current</span>}
+                              <span className="truncate max-w-[180px]">
+                                {s.full_address || s.address || s.postcode}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-[11px] text-[#B7791F]/70 mt-3">
+                          Selecting a property refreshes the analysis instantly
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               <div className="flex items-start justify-between gap-6 flex-wrap">
                 <div className="min-w-0 flex-1">
@@ -1515,6 +1572,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
         @keyframes shimmer-light {
           0%   { background-position: -200% 0; }
           100% { background-position:  200% 0; }
+        }
+        @keyframes slideDown {
+          from { opacity: 0; transform: translateY(-8px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
         .skeleton-light {
           background: linear-gradient(90deg, #F3F4F6 25%, #E9EAEC 50%, #F3F4F6 75%);
