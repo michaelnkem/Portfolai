@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MARKET_DATA, calcNetYield, calcGrossYield } from '@/lib/market-data'
 
-const HD_BASE = 'https://api.homedata.co.uk'
+const HD_BASE = 'https://api.homedata.co.uk/api'
 type CityKey = keyof typeof MARKET_DATA.cities
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -49,6 +49,22 @@ interface UserBenchmark {
   favMinBeds: number
   favMaxBeds: number
   favCities: string[]
+}
+
+// ── UK postcode helpers ───────────────────────────────────────────────────────
+
+function isFullUKPostcode(value: string): boolean {
+  return /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i.test(value.trim())
+}
+
+function normalizePostcode(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/, ' ')
+}
+
+// Extract postcode from a display_address string, e.g. "12 High St, London, E1 6RF"
+function extractPostcode(address: string): string {
+  const m = address.match(/\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i)
+  return m ? normalizePostcode(m[1]) : ''
 }
 
 // ── Rent estimation fallback ──────────────────────────────────────────────────
@@ -184,135 +200,247 @@ function calcInvestmentFit(
   return { score, label, badge, badgeColour, reasons: reasons.slice(0, 3) }
 }
 
-// ── Homedata raw listing shape ────────────────────────────────────────────────
+// ── Homedata boundary autocomplete ────────────────────────────────────────────
+
+interface BoundaryResult {
+  id: number | string
+  name?: string
+  type?: string
+}
+
+async function resolveBoundaryId(
+  location: string,
+  apiKey: string,
+): Promise<{ boundaryId: string | null; error?: string }> {
+  const url = `${HD_BASE}/boundaries/autocomplete/?q=${encodeURIComponent(location)}`
+  console.log('[deal-finder] boundary lookup:', url)
+
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Api-Key ${apiKey}`, Accept: 'application/json' },
+      cache: 'no-store',
+    })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      console.error(`[deal-finder] boundary autocomplete ${res.status} for "${location}":`, text.slice(0, 300))
+      return { boundaryId: null, error: `Boundary lookup failed: ${res.status}` }
+    }
+
+    const data = await res.json() as { results?: BoundaryResult[]; count?: number }
+    const first = data?.results?.[0]
+    if (!first?.id) {
+      console.warn(`[deal-finder] no boundary found for "${location}"`)
+      return { boundaryId: null, error: 'No boundary match' }
+    }
+
+    console.log(`[deal-finder] boundary for "${location}": id=${first.id} name="${first.name ?? ''}"`)
+    return { boundaryId: String(first.id) }
+  } catch (err) {
+    console.error('[deal-finder] boundary autocomplete error:', err)
+    return { boundaryId: null, error: String(err) }
+  }
+}
+
+// ── Homedata live listings fetch ──────────────────────────────────────────────
 
 interface HomedataListing {
-  uprn?: string | number | null
   id?: string | number | null
-  listing_id?: string | number | null
-  address?: string | null
-  full_address?: string | null
+  property_uprn?: string | number | null
   display_address?: string | null
+  transaction_type?: string | null
+  latest_status?: string | null
+  latest_price?: number | null
+  source?: string | null
+  bedrooms?: number | null
+  bathrooms?: number | null
+  listing_property_type?: string | null
+  loki_property_type?: string | null
+  ownership?: string | null
+  is_new_build?: boolean | null
+  added_date?: string | null
+  reduced_date?: string | null
+  description?: string | null
+  geopoint?: { lat?: number; lon?: number } | null
+  images?: string[] | null
+  agent_name?: string | null
+  // Extended fields that may also appear
   postcode?: string | null
   city?: string | null
   town?: string | null
-  local_authority?: string | null
-  property_type?: string | null
-  bedrooms?: number | null
-  bathrooms?: number | null
-  floor_area_sqm?: number | null
-  tenure?: string | null
-  asking_price?: number | null
-  price?: number | null
-  asking_price_pence?: number | null
-  previous_asking_price?: number | null
-  status?: string | null
-  listing_status?: string | null
   epc_rating?: string | null
   current_energy_rating?: string | null
-  image_url?: string | null
-  images?: string[] | null
-  listing_date?: string | null
-  created_at?: string | null
-  updated_at?: string | null
-  rent_estimate?: number | null
-  estimated_rent?: number | null
+  floor_area_sqm?: number | null
   estimated_market_value?: number | null
   market_value?: number | null
   gross_yield?: number | null
   net_yield?: number | null
+  rent_estimate?: number | null
+  estimated_rent?: number | null
+  previous_asking_price?: number | null
 }
 
-// ── Fetch listings from Homedata for one location ─────────────────────────────
+interface HomedataListingsResponse {
+  count?: number
+  page?: number
+  page_size?: number
+  total_pages?: number
+  results?: HomedataListing[]
+}
 
-async function fetchListingsForLocation(
-  location: string,
-  params: Record<string, string>,
+async function fetchLiveListings(
+  locationKey: { boundaryId: string } | { postcode: string },
+  filters: {
+    transaction_type: string
+    bedrooms?: number
+    max_bedrooms?: number
+    min_price?: number
+    max_price?: number
+    property_type?: string
+    page_size?: number
+    sort?: string
+  },
   apiKey: string,
 ): Promise<{ ok: boolean; results: HomedataListing[]; statusCode?: number }> {
-  const qs = new URLSearchParams({ ...params, location, status: 'for_sale', page_size: '50' })
-  const url = `${HD_BASE}/api/listings/?${qs.toString()}`
+  const params = new URLSearchParams()
+
+  if ('boundaryId' in locationKey) {
+    params.set('boundary_id', locationKey.boundaryId)
+  } else {
+    params.set('postcode', locationKey.postcode)
+  }
+
+  params.set('transaction_type', filters.transaction_type || 'Sale')
+  if (filters.bedrooms)      params.set('bedrooms',      String(filters.bedrooms))
+  if (filters.max_bedrooms)  params.set('max_bedrooms',  String(filters.max_bedrooms))
+  if (filters.min_price)     params.set('min_price',     String(filters.min_price))
+  if (filters.max_price)     params.set('max_price',     String(filters.max_price))
+  if (filters.property_type) params.set('property_type', filters.property_type)
+  params.set('page_size', String(filters.page_size ?? 50))
+  params.set('sort', filters.sort ?? '-added_date')
+
+  const url = `${HD_BASE}/live-listings/search/?${params.toString()}`
+  // Log URL without the API key appearing in the query (it's in the header)
+  console.log('[deal-finder] live listings fetch:', url)
 
   try {
     const res = await fetch(url, {
-      headers: { Authorization: `Api-Key ${apiKey}` },
-      next: { revalidate: 300 },
+      headers: { Authorization: `Api-Key ${apiKey}`, Accept: 'application/json' },
+      cache: 'no-store',
     })
 
+    console.log('[deal-finder] live listings response status:', res.status)
+
     if (!res.ok) {
-      let body = ''
-      try { body = await res.text() } catch {}
-      console.error(`[deal-finder] Homedata ${res.status} for ${location}:`, body.slice(0, 400))
+      const text = await res.text().catch(() => '')
+      console.error(`[deal-finder] live listings ${res.status}:`, text.slice(0, 400))
       return { ok: false, results: [], statusCode: res.status }
     }
 
-    const data = await res.json() as
-      | { results?: HomedataListing[] }
-      | HomedataListing[]
-    const results = Array.isArray(data) ? data : (data.results ?? [])
+    const data = await res.json() as HomedataListingsResponse
+    const results = data?.results ?? []
+    console.log(`[deal-finder] received ${results.length} results (total count: ${data?.count ?? '?'})`)
     return { ok: true, results }
   } catch (err) {
-    console.error('[deal-finder] fetch error for', location, err)
+    console.error('[deal-finder] live listings fetch error:', err)
     return { ok: false, results: [] }
   }
 }
 
-// ── Normalise a raw listing into DealCandidate ────────────────────────────────
+// ── Fetch listings for a single location string ───────────────────────────────
 
-function normaliseListing(raw: HomedataListing, bench: UserBenchmark): DealCandidate | null {
+async function fetchListingsForLocation(
+  location: string,
+  filters: Parameters<typeof fetchLiveListings>[1],
+  apiKey: string,
+): Promise<{ ok: boolean; results: HomedataListing[] }> {
+  if (isFullUKPostcode(location)) {
+    const postcode = normalizePostcode(location)
+    console.log(`[deal-finder] "${location}" is a full postcode → direct postcode search`)
+    return fetchLiveListings({ postcode }, filters, apiKey)
+  }
+
+  // City/town/outcode — resolve via boundary autocomplete first
+  const { boundaryId, error } = await resolveBoundaryId(location, apiKey)
+  if (!boundaryId) {
+    console.warn(`[deal-finder] skipping "${location}": ${error}`)
+    return { ok: false, results: [] }
+  }
+
+  return fetchLiveListings({ boundaryId }, filters, apiKey)
+}
+
+// ── Normalise a Homedata live listing into DealCandidate ─────────────────────
+
+function normaliseListing(
+  raw: HomedataListing,
+  sourceCityHint: string | null,
+  bench: UserBenchmark,
+): DealCandidate | null {
+  // Price — Homedata live listings use latest_price
   const askingPrice =
-    typeof raw.asking_price === 'number' && raw.asking_price > 0 ? raw.asking_price :
-    typeof raw.asking_price_pence === 'number' && raw.asking_price_pence > 0 ? raw.asking_price_pence / 100 :
-    typeof raw.price === 'number' && raw.price > 0 ? raw.price : 0
+    typeof raw.latest_price === 'number' && raw.latest_price > 0 ? raw.latest_price : 0
   if (!askingPrice) return null
 
-  const uprn = raw.uprn != null ? String(raw.uprn) : null
-  const listingId = raw.listing_id != null ? String(raw.listing_id) :
-    raw.id != null ? String(raw.id) : null
+  const uprn = raw.property_uprn != null ? String(raw.property_uprn) : null
+  const listingId = raw.id != null ? String(raw.id) : null
   const id = uprn ?? listingId ?? `dl-${Math.random().toString(36).slice(2)}`
 
-  const address        = String(raw.full_address ?? raw.address ?? raw.display_address ?? '').trim()
-  const displayAddress = String(raw.display_address ?? raw.full_address ?? raw.address ?? '').trim()
-  const postcode       = String(raw.postcode ?? '').trim().toUpperCase()
-  const outcode        = postcode.split(' ')[0] || null
+  const displayAddress = String(raw.display_address ?? '').trim()
+  const address        = displayAddress  // live listings use display_address as canonical address
 
+  // Try to extract postcode from display_address; fall back to raw.postcode field if present
+  const extractedPostcode = extractPostcode(displayAddress)
+  const postcode = extractedPostcode || String(raw.postcode ?? '').trim().toUpperCase()
+  const outcode  = postcode.split(' ')[0] || null
+
+  // City resolution — prefer explicit city field, fall back to sourceCityHint
   const rawCity = String(raw.city ?? raw.town ?? '').trim()
   const knownCityKeys = Object.keys(MARKET_DATA.cities)
-  const city = knownCityKeys.find(k => rawCity.toLowerCase().includes(k.toLowerCase())) ?? (rawCity || null)
+  const city =
+    knownCityKeys.find(k => rawCity.toLowerCase().includes(k.toLowerCase())) ??
+    (sourceCityHint ? (knownCityKeys.find(k => sourceCityHint.toLowerCase().includes(k.toLowerCase())) ?? null) : null) ??
+    (rawCity || null) ??
+    sourceCityHint ??
+    null
 
-  const propertyType  = String(raw.property_type ?? '').trim() || null
+  const propertyType  = String(raw.listing_property_type ?? raw.loki_property_type ?? '').trim() || null
   const bedrooms      = typeof raw.bedrooms === 'number' ? raw.bedrooms : null
   const bathrooms     = typeof raw.bathrooms === 'number' ? raw.bathrooms : null
   const floorAreaSqm  = typeof raw.floor_area_sqm === 'number' ? raw.floor_area_sqm : null
-  const tenure        = String(raw.tenure ?? '').trim().toLowerCase() || null
+  const tenure        = String(raw.ownership ?? '').trim().toLowerCase() || null
 
   const previousAskingPrice =
     typeof raw.previous_asking_price === 'number' && raw.previous_asking_price !== askingPrice
       ? raw.previous_asking_price : null
 
-  const rawStatus = String(raw.status ?? raw.listing_status ?? '').toLowerCase()
+  // Status normalisation from latest_status
+  const rawStatus = String(raw.latest_status ?? '').toLowerCase()
+  const isReduced = rawStatus.includes('reduc') || (raw.reduced_date != null && raw.reduced_date !== '')
   const listingStatus: DealCandidate['listingStatus'] =
-    rawStatus.includes('reduc') ? 'reduced' :
-    rawStatus.includes('new')   ? 'new_listing' :
     rawStatus.includes('sold')  ? 'sold_stc' :
-    rawStatus.includes('sale')  ? 'for_sale' : 'unknown'
+    isReduced                   ? 'reduced' :
+    rawStatus.includes('new')   ? 'new_listing' :
+    rawStatus.includes('sale') || rawStatus.includes('for sale') ? 'for_sale' : 'unknown'
 
-  const listingDate = raw.listing_date ?? raw.created_at ?? null
-  const updatedAt   = raw.updated_at ?? null
+  const listingDate = raw.added_date ?? null
+  const updatedAt   = raw.reduced_date ?? raw.added_date ?? null
 
   const epcRating = String(raw.epc_rating ?? raw.current_energy_rating ?? '').trim().toUpperCase().match(/[A-G]/)?.[0] ?? null
 
-  const rawImageUrl = raw.image_url ?? (Array.isArray(raw.images) ? raw.images[0] : null) ?? null
-  const imageUrl    = typeof rawImageUrl === 'string' ? rawImageUrl : null
-  const imageUrls   = Array.isArray(raw.images)
-    ? raw.images.filter((u): u is string => typeof u === 'string')
-    : imageUrl ? [imageUrl] : []
+  // Images — Homedata returns images as an array of strings or objects
+  const rawImages = raw.images ?? []
+  const imageUrls: string[] = rawImages
+    .map(img => (typeof img === 'string' ? img : (img as Record<string, unknown>)?.url as string ?? ''))
+    .filter((u): u is string => typeof u === 'string' && u.length > 0)
+  const imageUrl = imageUrls[0] ?? null
 
   const estimatedMarketValue =
     typeof raw.estimated_market_value === 'number' ? raw.estimated_market_value :
     typeof raw.market_value === 'number' ? raw.market_value : null
 
-  const rawRent = typeof raw.rent_estimate === 'number' ? raw.rent_estimate :
+  const rawRent =
+    typeof raw.rent_estimate === 'number' ? raw.rent_estimate :
     typeof raw.estimated_rent === 'number' ? raw.estimated_rent : null
   const rentEstimateMonthly = rawRent ?? estimateRent(city, bedrooms)
 
@@ -345,7 +473,7 @@ function normaliseListing(raw: HomedataListing, bench: UserBenchmark): DealCandi
 
   return {
     id, uprn, address, displayAddress, postcode, outcode,
-    city, localAuthority: String(raw.local_authority ?? '').trim() || null,
+    city, localAuthority: null,
     propertyType, bedrooms, bathrooms, floorAreaSqm, tenure,
     askingPrice, previousAskingPrice,
     listingStatus, listingDate, updatedAt,
@@ -379,23 +507,15 @@ function parseParams(req: NextRequest) {
     favMinBeds: num('favMinBeds') || 1,
     favMaxBeds: num('favMaxBeds') || 5,
     favCities: csv('favCities'),
-    minPrice: num('minPrice') || undefined,
-    maxPrice: num('maxPrice') || undefined,
-    minYield: num('minYield') || undefined,
+    minPrice: num('minPrice') || undefined as number | undefined,
+    maxPrice: num('maxPrice') || undefined as number | undefined,
+    minYield: num('minYield') || undefined as number | undefined,
+    minNetYield: num('minNetYield') || undefined as number | undefined,
     propertyTypes: csv('propertyTypes'),
-    minBedrooms: num('minBedrooms') || undefined,
-    maxBedrooms: num('maxBedrooms') || undefined,
+    minBedrooms: num('minBedrooms') || undefined as number | undefined,
+    maxBedrooms: num('maxBedrooms') || undefined as number | undefined,
+    tenure: s.get('tenure') ?? undefined,
   }
-}
-
-function buildHdParams(p: ReturnType<typeof parseParams>): Record<string, string> {
-  const q: Record<string, string> = {}
-  if (p.minPrice)             q.min_price      = String(p.minPrice)
-  if (p.maxPrice)             q.max_price      = String(p.maxPrice)
-  if (p.minBedrooms)          q.min_bedrooms   = String(p.minBedrooms)
-  if (p.maxBedrooms)          q.max_bedrooms   = String(p.maxBedrooms)
-  if (p.propertyTypes.length) q.property_type  = p.propertyTypes[0]
-  return q
 }
 
 // ── Route handler ─────────────────────────────────────────────────────────────
@@ -404,10 +524,12 @@ export async function GET(req: NextRequest) {
   try {
     const apiKey = process.env.HOMEDATA_API_KEY
     if (!apiKey) {
+      console.warn('[deal-finder] HOMEDATA_API_KEY not set — returning unavailable')
       return NextResponse.json({ status: 'unavailable', deals: [], meta: null })
     }
 
     const p = parseParams(req)
+    console.log(`[deal-finder] mode=${p.mode} cities=[${p.cities}] outcodes=[${p.outcodes}]`)
 
     const bench: UserBenchmark = {
       favAvgNetYield: p.favAvgNetYield,
@@ -418,52 +540,85 @@ export async function GET(req: NextRequest) {
       favCities: p.favCities,
     }
 
-    const hdParams = buildHdParams(p)
+    const listingFilters = {
+      transaction_type: 'Sale',
+      bedrooms: p.minBedrooms,
+      max_bedrooms: p.maxBedrooms,
+      min_price: p.minPrice,
+      max_price: p.maxPrice,
+      property_type: p.propertyTypes.length
+        ? p.propertyTypes.map(t => {
+            // Normalise UI labels to Homedata expected values
+            if (t === 'Semi-Detached') return 'Semi-Detached'
+            if (t === 'Detached')      return 'Detached'
+            if (t === 'Terraced')      return 'Terraced'
+            if (t === 'Flat')          return 'Flat'
+            if (t === 'Bungalow')      return 'Bungalow'
+            return t
+          }).join(',')
+        : undefined,
+      page_size: 50,
+      sort: '-added_date',
+    }
+
+    // Deduplicate locations — cities first, then outcodes
     const locations = Array.from(new Set([...p.cities, ...p.outcodes])).filter(Boolean)
 
     if (!locations.length) {
+      console.warn('[deal-finder] no locations specified')
       return NextResponse.json({ status: 'unavailable', deals: [], meta: null })
     }
 
+    // Fetch from all locations in parallel
     const fetches = await Promise.allSettled(
-      locations.map(loc => fetchListingsForLocation(loc, hdParams, apiKey))
+      locations.map(loc => fetchListingsForLocation(loc, listingFilters, apiKey))
     )
 
-    const allRaw: HomedataListing[] = []
+    const allRaw: Array<{ listing: HomedataListing; sourceCityHint: string }> = []
     let anyOk = false
-    for (const result of fetches) {
+
+    for (let i = 0; i < fetches.length; i++) {
+      const result = fetches[i]
+      const loc = locations[i]
       if (result.status === 'fulfilled' && result.value.ok) {
         anyOk = true
-        allRaw.push(...result.value.results)
+        for (const listing of result.value.results) {
+          allRaw.push({ listing, sourceCityHint: loc })
+        }
       }
     }
 
     if (!anyOk) {
+      console.warn('[deal-finder] all location fetches failed — returning unavailable')
       return NextResponse.json({ status: 'unavailable', deals: [], meta: null })
     }
 
-    // Deduplicate
+    // Deduplicate by uprn / listing id
     const seen = new Set<string>()
-    const deduped = allRaw.filter(r => {
-      const key = String(r.uprn ?? r.listing_id ?? r.id ?? '')
+    const deduped = allRaw.filter(({ listing }) => {
+      const key = String(listing.property_uprn ?? listing.id ?? '')
       if (!key || seen.has(key)) return false
       seen.add(key)
       return true
     })
 
-    // Normalise and filter
+    // Normalise
     let deals = deduped
-      .map(raw => normaliseListing(raw, bench))
+      .map(({ listing, sourceCityHint }) => normaliseListing(listing, sourceCityHint, bench))
       .filter((d): d is DealCandidate => d !== null)
 
+    // Server-side yield/netYield filter
     if (p.minYield) {
-      deals = deals.filter(d => d.netYield != null && d.netYield >= p.minYield!)
+      deals = deals.filter(d => d.grossYield != null && d.grossYield >= p.minYield!)
+    }
+    if (p.minNetYield) {
+      deals = deals.filter(d => d.netYield != null && d.netYield >= p.minNetYield!)
     }
 
     deals.sort((a, b) => b.investmentFitScore - a.investmentFitScore)
     deals = deals.slice(0, 50)
 
-    // Meta
+    // Meta summary
     const yields = deals.map(d => d.netYield).filter((y): y is number => y != null)
     const prices = deals.map(d => d.askingPrice).filter(v => v > 0)
     const bestYield = yields.length ? Math.max(...yields) : null
@@ -482,7 +637,9 @@ export async function GET(req: NextRequest) {
       newListingsCount: deals.filter(d => d.listingStatus === 'new_listing').length,
     }
 
+    console.log(`[deal-finder] returning ${deals.length} deals`)
     return NextResponse.json({ status: 'ok', deals, meta })
+
   } catch (err) {
     console.error('[deal-finder] unhandled error:', err)
     return NextResponse.json({ status: 'unavailable', deals: [], meta: null })
