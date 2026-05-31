@@ -127,6 +127,16 @@ function AddToDropdown({
 export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavourite, onHome, onMarketIntel, onSearchProperty, isSaved = false, isFavourite = false, inline = false }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
   const [activeData, setActiveData] = useState<Record<string, unknown>>(data)
+
+  useEffect(() => {
+    const askingPrice = (data.enriched as Record<string, unknown>)?.estimatedCurrentValue as number
+    if (askingPrice && !(data as Record<string, unknown>)._original_asking_price) {
+      setActiveData(prev => ({
+        ...prev,
+        _original_asking_price: askingPrice,
+      }))
+    }
+  }, [])
   const [selectedUprnOverride, setSelectedUprnOverride] = useState<string | null>(null)
   const [rent, setRent] = useState<number>(0)
   const [deposit, setDeposit] = useState(0)
@@ -234,7 +244,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
 
   // Estimated current value — recalculates locally when bedroom override is active (Part C)
   const estimatedCurrentValue = (() => {
-    const serverValue = Number(enriched?.estimatedCurrentValue || p?.estimated_current_value || p?.estimatedCurrentValue || 0)
+    const serverValue = Number(
+      ((activeData as Record<string, unknown>)._original_asking_price as number) ||
+      enriched?.estimatedCurrentValue ||
+      p?.estimated_current_value ||
+      p?.estimatedCurrentValue ||
+      0
+    )
     const anchor = serverValue > 0 ? serverValue : _fallback
     if (!Number.isFinite(anchor) || anchor <= 0) return _fallback
     if (bedroomsOverride === null) return anchor
@@ -637,10 +653,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                                   const res = await fetch(`/api/property?uprn=${s.uprn}`)
                                   if (!res.ok) return
                                   const freshData = await res.json() as Record<string, unknown>
-                                  // Preserve asking price override from original activeData
-                                  const srcEnriched = activeData.enriched as Record<string, unknown> | null
-                                  if (srcEnriched?.estimatedCurrentValue && freshData.enriched) {
-                                    (freshData.enriched as Record<string, unknown>).estimatedCurrentValue = srcEnriched.estimatedCurrentValue
+                                  const originalAskingPrice = (activeData._original_asking_price as number)
+                                    || ((activeData.enriched as Record<string, unknown>)?.estimatedCurrentValue as number)
+
+                                  if (originalAskingPrice && freshData?.enriched) {
+                                    (freshData.enriched as Record<string, unknown>).estimatedCurrentValue = originalAskingPrice
+                                    ;(freshData.enriched as Record<string, unknown>).valuationMethod = 'listing_asking_price'
                                   }
                                   setSelectedUprnOverride(s.uprn)
                                   setActiveData({
@@ -648,6 +666,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                                     _uprn_suggestions: activeData._uprn_suggestions,
                                     _uprn_notice: `Showing analysis for ${s.full_address || s.address} — select another property below to compare.`,
                                     _agent_contact: activeData._agent_contact,
+                                    _original_asking_price: originalAskingPrice,
                                   })
                                   setTab('overview')
                                 } catch { /* silent fail */ }
