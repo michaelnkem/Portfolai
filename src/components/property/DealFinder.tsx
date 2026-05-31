@@ -395,6 +395,9 @@ function DealCard({
           className="mt-auto w-full bg-[#047857] text-white text-sm font-semibold py-2.5 rounded-xl hover:bg-[#065F46] transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
           {isOpening ? <><Spinner /> Loading analysis…</> : 'View Analysis →'}
         </button>
+        {deal.agentName && (
+          <p className="text-[10px] text-[#9CA3AF] mt-1 text-center">Listed by {deal.agentName}</p>
+        )}
       </div>
     </div>
   )
@@ -976,6 +979,7 @@ export function DealFinder({
             listingDate: deal.listingDate,
             listingId: deal.id,
             listingStatus: deal.listingStatus,
+            agentName: deal.agentName ?? null,
           },
         }
         if (resolvedViaSearch) {
@@ -1049,6 +1053,7 @@ export function DealFinder({
           listingDate: deal.listingDate,
           listingId: deal.id,
           listingStatus: deal.listingStatus,
+          agentName: deal.agentName ?? null,
         },
       }
       onOpenAnalysis(partialData)
@@ -1283,7 +1288,7 @@ export function DealFinder({
                       <p className="text-sm text-[#9CA3AF]">No deals match this filter</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                       {drillDownDeals.map(deal => (
                         <DrillDownCard
                           key={deal.id}
@@ -1588,7 +1593,7 @@ export function DealFinder({
                       <p className="text-sm text-[#9CA3AF]">No deals match this filter</p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                       {drillDownDeals.map(deal => (
                         <DrillDownCard
                           key={deal.id}
