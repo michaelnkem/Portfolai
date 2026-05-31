@@ -921,9 +921,21 @@ export function DealFinder({
           if (searchRes.ok) {
             const searchData = await searchRes.json()
             const suggestions = (searchData.suggestions || []) as Array<Record<string, unknown>>
-            if (suggestions.length > 0 && suggestions[0].uprn) {
+            if (suggestions.length === 1) {
+              // Single result — use silently
               uprn = String(suggestions[0].uprn)
               resolvedViaSearch = true
+            } else if (suggestions.length >= 2 && suggestions.length <= 3) {
+              // 2–3 results — use first silently, notice will explain
+              uprn = String(suggestions[0].uprn)
+              resolvedViaSearch = true
+            } else if (suggestions.length >= 4) {
+              // 4+ results — use first result immediately so analysis loads,
+              // but pass the full list so PropertyDetail can show the picker
+              uprn = String(suggestions[0].uprn)
+              resolvedViaSearch = true
+              ;(window as unknown as Record<string, unknown>)._pendingUprnSuggestions = suggestions
+              ;(window as unknown as Record<string, unknown>)._pendingDeal = deal
             }
           }
         } catch {
@@ -968,6 +980,15 @@ export function DealFinder({
         }
         if (resolvedViaSearch) {
           enrichedData._uprn_notice = `Property data sourced from nearest match on ${deal.displayAddress || deal.postcode}. Transaction history may relate to an adjacent property. Investment metrics are based on local market data and remain accurate.`
+        }
+        // Attach suggestions for picker if 4+ results were found
+        const pending = (window as unknown as Record<string, unknown>)._pendingUprnSuggestions
+        const pendingDeal = (window as unknown as Record<string, unknown>)._pendingDeal
+        if (pending && pendingDeal === deal) {
+          enrichedData._uprn_suggestions = pending
+          enrichedData._uprn_notice = `Multiple properties found on ${deal.displayAddress || deal.postcode}. Showing the closest match — select below to refine.`
+          delete (window as unknown as Record<string, unknown>)._pendingUprnSuggestions
+          delete (window as unknown as Record<string, unknown>)._pendingDeal
         }
         onOpenAnalysis(enrichedData)
         return
