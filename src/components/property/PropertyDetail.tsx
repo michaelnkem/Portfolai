@@ -126,7 +126,7 @@ function AddToDropdown({
 
 export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavourite, onHome, onMarketIntel, onSearchProperty, isSaved = false, isFavourite = false, inline = false }: PropertyDetailProps) {
   const [tab, setTab] = useState<DetailTab>('overview')
-  const [pickerOverride, setPickerOverride] = useState<Record<string, unknown> | null>(null)
+  const [activeData, setActiveData] = useState<Record<string, unknown>>(data)
   const [selectedUprnOverride, setSelectedUprnOverride] = useState<string | null>(null)
   const [rent, setRent] = useState<number>(0)
   const [deposit, setDeposit] = useState(0)
@@ -166,17 +166,17 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
   }, [])
 
   // ── Data extraction ──────────────────────────────────────────────────────────
-  const p        = data.property    as Record<string, unknown>
-  const enriched = data.enriched    as Record<string, unknown>
-  const epc      = data.epc         as Record<string, unknown> | null
+  const p        = activeData.property    as Record<string, unknown>
+  const enriched = activeData.enriched    as Record<string, unknown>
+  const epc      = activeData.epc         as Record<string, unknown> | null
   const uprn     = String(p?.uprn ?? '')
-  const risks    = data.risks       as Array<Record<string, unknown>> | undefined
-  const transactions = data.transactions as Array<Record<string, unknown>> | undefined
-  const cityName = data.cityName    as string
+  const risks    = activeData.risks       as Array<Record<string, unknown>> | undefined
+  const transactions = activeData.transactions as Array<Record<string, unknown>> | undefined
+  const cityName = activeData.cityName    as string
   const cityData = cityName ? MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities] : null
 
   // Live listing context — injected by DealFinder when opening from search results
-  const liveListingCtx = data._liveListingContext as Record<string, unknown> | null | undefined
+  const liveListingCtx = activeData._liveListingContext as Record<string, unknown> | null | undefined
   const liveAskingPrice = liveListingCtx?.sourceContext === 'homedata_live_listing'
     ? (Number(liveListingCtx.liveListingAskingPrice ?? 0) || 0)
     : 0
@@ -496,7 +496,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
           {NAV_ITEMS.map(item => (
             <button key={item.label}
               onClick={() => {
-                if (item.label === 'Market Insights') onMarketIntel?.(data)
+                if (item.label === 'Market Insights') onMarketIntel?.(activeData)
                 else if (item.label === 'Dashboard') onHome ? onHome() : onClose()
               }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors text-left ${
@@ -605,11 +605,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               </button>
 
               {(() => {
-                const nd = pickerOverride ?? (data as Record<string, unknown>)
-                if (!nd._uprn_notice) return null
+                if (!activeData._uprn_notice) return null
                 type Suggestion = { uprn: string; full_address: string; address: string; postcode: string }
-                const suggestions = Array.isArray(nd._uprn_suggestions)
-                  ? (nd._uprn_suggestions as Suggestion[])
+                const suggestions = Array.isArray(activeData._uprn_suggestions)
+                  ? (activeData._uprn_suggestions as Suggestion[])
                   : null
                 return (
                   <div className="mb-6 overflow-hidden rounded-2xl border border-[#F5D48A] bg-[#FFFBF0] shadow-[0_2px_8px_rgba(184,120,32,0.06)]"
@@ -618,7 +617,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     <div className="flex items-start gap-3 px-5 py-4">
                       <span className="text-[#B7791F] text-sm shrink-0 mt-0.5">⚠</span>
                       <p className="text-[13px] text-[#92400E] leading-relaxed flex-1">
-                        {String(nd._uprn_notice)}
+                        {String(activeData._uprn_notice)}
                       </p>
                     </div>
                     {/* Inline picker — only when 4+ suggestions exist */}
@@ -638,15 +637,18 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                                   const res = await fetch(`/api/property?uprn=${s.uprn}`)
                                   if (!res.ok) return
                                   const freshData = await res.json() as Record<string, unknown>
-                                  // Preserve asking price override from original data
-                                  const srcEnriched = (data as Record<string, unknown>).enriched as Record<string, unknown> | null
+                                  // Preserve asking price override from original activeData
+                                  const srcEnriched = activeData.enriched as Record<string, unknown> | null
                                   if (srcEnriched?.estimatedCurrentValue && freshData.enriched) {
                                     (freshData.enriched as Record<string, unknown>).estimatedCurrentValue = srcEnriched.estimatedCurrentValue
                                   }
-                                  freshData._uprn_notice = `Showing analysis for ${s.full_address || s.address} — select another property below to compare.`
-                                  freshData._uprn_suggestions = (data as Record<string, unknown>)._uprn_suggestions
-                                  setPickerOverride(freshData)
                                   setSelectedUprnOverride(s.uprn)
+                                  setActiveData({
+                                    ...freshData,
+                                    _uprn_suggestions: activeData._uprn_suggestions,
+                                    _uprn_notice: `Showing analysis for ${s.full_address || s.address} — select another property below to compare.`,
+                                  })
+                                  setTab('overview')
                                 } catch { /* silent fail */ }
                               }}
                               className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium border transition-all duration-200 hover:shadow-sm active:scale-[0.98] ${
