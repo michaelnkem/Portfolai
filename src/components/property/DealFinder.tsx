@@ -362,12 +362,11 @@ function DrillDownCard({
     deal.epcRating <= 'C' ? 'text-[#047857]' :
     deal.epcRating <= 'D' ? 'text-[#B7791F]' : 'text-[#DC2626]'
 
-  const fitColor =
-    deal.investmentFitScore >= 80
-      ? 'text-[#047857] bg-[#ECFDF5] border-[#A7F3D0]'
-      : deal.investmentFitScore >= 70
-      ? 'text-[#B7791F] bg-[#FFF7E6] border-[#F5D48A]'
-      : 'text-[#6B7280] bg-[#F3F4F6] border-[#E7E5DD]'
+  const fitBg =
+    deal.investmentFitScore >= 90 ? 'bg-[#047857] text-white' :
+    deal.investmentFitScore >= 80 ? 'bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]' :
+    deal.investmentFitScore >= 70 ? 'bg-[#FFF7E6] text-[#B7791F] border border-[#F5D48A]' :
+    'bg-[#F3F4F6] text-[#6B7280]'
 
   const dateLabel = deal.listingStatus === 'reduced' && deal.updatedAt
     ? `Reduced ${relativeDate(deal.updatedAt).replace('Listed ', '')}`
@@ -375,120 +374,115 @@ function DrillDownCard({
 
   return (
     <div
-      className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_4px_16px_rgba(17,24,39,0.04)] hover:border-[#A7F3D0] hover:shadow-[0_8px_24px_rgba(4,120,87,0.08)] transition-all cursor-pointer"
       onClick={onOpen}
-    >
-      <div className="flex items-stretch gap-0 p-5">
+      className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_4px_16px_rgba(17,24,39,0.04)] hover:border-[#A7F3D0] hover:shadow-[0_8px_24px_rgba(4,120,87,0.08)] transition-all cursor-pointer flex flex-col overflow-hidden">
 
-        {/* Left — address, type, attributes */}
-        <div className="flex-1 min-w-0 pr-6 border-r border-[#F3F4F6]">
-          <div className="flex items-start gap-3 mb-2">
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-[#111827] text-base leading-snug truncate" style={{ fontFamily: SERIF }}>
-                {deal.displayAddress || deal.address}
-              </p>
-              <div className="flex items-center gap-2 mt-1 flex-wrap">
-                {deal.postcode && (
-                  <span className="text-[11px] font-semibold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-2 py-0.5 rounded-full">
-                    {deal.postcode}
-                  </span>
-                )}
-                {deal.city && <span className="text-[11px] text-[#6B7280]">{deal.city}</span>}
-                {dateLabel && (
-                  <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
-                    deal.listingStatus === 'new_listing' ? 'bg-[#ECFDF5] text-[#047857]' :
-                    deal.listingStatus === 'reduced' ? 'bg-[#EFF6FF] text-[#1D4ED8]' :
-                    'text-[#9CA3AF]'
-                  }`}>
-                    {dateLabel}
-                  </span>
-                )}
-              </div>
+      {/* Card header — address + badges */}
+      <div className="px-5 pt-5 pb-4 border-b border-[#F3F4F6]">
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-[#111827] text-[15px] leading-snug mb-1 truncate" style={{ fontFamily: SERIF }}>
+              {deal.displayAddress || deal.address}
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              {deal.postcode && (
+                <span className="text-[11px] font-semibold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] px-2 py-0.5 rounded-full">
+                  {deal.postcode}
+                </span>
+              )}
+              <span className="text-[11px] text-[#6B7280]">{deal.city}</span>
+              {dateLabel && (
+                <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
+                  deal.listingStatus === 'new_listing' ? 'bg-[#ECFDF5] text-[#047857]' :
+                  deal.listingStatus === 'reduced' ? 'bg-[#EFF6FF] text-[#1D4ED8]' :
+                  'bg-[#F6F3EC] text-[#9CA3AF]'
+                }`}>
+                  {dateLabel}
+                </span>
+              )}
             </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${fitBg}`}>
+              {deal.investmentFitScore}%
+            </span>
             <button
               type="button"
               onClick={e => { e.stopPropagation(); onToggleFav() }}
               aria-label={isFav ? 'Remove from favourites' : 'Add to favourites'}
-              className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg border border-[#E7E5DD] bg-[#FAF9F5] hover:bg-white transition-colors text-base">
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#E7E5DD] bg-[#FAF9F5] hover:bg-white transition-colors text-base">
               <span className={isFav ? 'text-[#B7791F]' : 'text-[#D1D5DB]'}>{isFav ? '★' : '☆'}</span>
             </button>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {deal.propertyType && (
-              <span className="text-[11px] bg-[#F6F3EC] text-[#374151] px-2.5 py-1 rounded-full">{deal.propertyType}</span>
-            )}
-            {deal.bedrooms != null && (
-              <span className="text-[11px] bg-[#F6F3EC] text-[#374151] px-2.5 py-1 rounded-full">{deal.bedrooms} bed</span>
-            )}
-            {deal.bathrooms != null && (
-              <span className="text-[11px] bg-[#F6F3EC] text-[#374151] px-2.5 py-1 rounded-full">{deal.bathrooms} bath</span>
-            )}
-            {deal.tenure && (
-              <span className="text-[11px] bg-[#F6F3EC] text-[#6B7280] px-2.5 py-1 rounded-full capitalize">{deal.tenure}</span>
-            )}
-            {deal.epcRating && (
-              <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#F6F3EC] ${epcColor}`}>EPC {deal.epcRating}</span>
-            )}
-          </div>
         </div>
 
-        {/* Centre — financial metrics */}
-        <div className="flex items-center gap-6 px-6 border-r border-[#F3F4F6]">
-          <div className="text-center">
-            <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Asking Price</p>
-            <p className="text-xl font-bold text-[#111827]" style={{ fontFamily: SERIF }}>
-              {fmtPrice(deal.askingPrice)}
-            </p>
-            {deal.previousAskingPrice && deal.previousAskingPrice !== deal.askingPrice && (
-              <p className="text-[11px] text-[#9CA3AF] line-through">{fmtPrice(deal.previousAskingPrice)}</p>
-            )}
-          </div>
-          <div className="text-center">
-            <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Net Yield</p>
-            <p className={`text-xl font-bold ${(deal.netYield ?? 0) >= 6 ? 'text-[#047857]' : 'text-[#111827]'}`} style={{ fontFamily: SERIF }}>
-              {fmtYield(deal.netYield)}
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Gross Yield</p>
-            <p className="text-xl font-bold text-[#111827]" style={{ fontFamily: SERIF }}>
-              {fmtYield(deal.grossYield)}
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Est. Rent</p>
-            <p className="text-xl font-bold text-[#111827]" style={{ fontFamily: SERIF }}>
-              {fmtRent(deal.rentEstimateMonthly)}
-            </p>
-          </div>
-        </div>
-
-        {/* Right — investment fit + action */}
-        <div className="flex flex-col items-center justify-between pl-6 shrink-0 min-w-[140px]">
-          <div className="text-center mb-3">
-            <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Investment Fit</p>
-            <span className={`inline-flex items-center text-sm font-bold px-3 py-1.5 rounded-full border ${fitColor}`}>
-              {deal.investmentFitScore}% · {deal.investmentFitLabel}
+        {/* Property attributes */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {deal.propertyType && (
+            <span className="text-[11px] bg-[#F6F3EC] text-[#374151] px-2.5 py-1 rounded-full">{deal.propertyType}</span>
+          )}
+          {deal.bedrooms != null && (
+            <span className="text-[11px] bg-[#F6F3EC] text-[#374151] px-2.5 py-1 rounded-full">{deal.bedrooms} bed</span>
+          )}
+          {deal.bathrooms != null && (
+            <span className="text-[11px] bg-[#F6F3EC] text-[#374151] px-2.5 py-1 rounded-full">{deal.bathrooms} bath</span>
+          )}
+          {deal.tenure && (
+            <span className="text-[11px] bg-[#F6F3EC] text-[#6B7280] px-2.5 py-1 rounded-full capitalize">{deal.tenure}</span>
+          )}
+          {deal.epcRating && (
+            <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#F6F3EC] ${epcColor}`}>
+              EPC {deal.epcRating}
             </span>
+          )}
+        </div>
+      </div>
+
+      {/* Financial metrics */}
+      <div className="grid grid-cols-4 divide-x divide-[#F3F4F6] px-0">
+        {[
+          { label: 'Asking Price', value: fmtPrice(deal.askingPrice), highlight: false, strike: deal.previousAskingPrice && deal.previousAskingPrice !== deal.askingPrice ? fmtPrice(deal.previousAskingPrice) : null },
+          { label: 'Net Yield', value: fmtYield(deal.netYield), highlight: (deal.netYield ?? 0) >= 6, strike: null },
+          { label: 'Gross Yield', value: fmtYield(deal.grossYield), highlight: false, strike: null },
+          { label: 'Est. Rent', value: fmtRent(deal.rentEstimateMonthly), highlight: false, strike: null },
+        ].map(metric => (
+          <div key={metric.label} className="flex flex-col items-center justify-center py-4 px-2 text-center">
+            <p className="text-[9px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">{metric.label}</p>
+            <p className={`text-base font-bold leading-none ${metric.highlight ? 'text-[#047857]' : 'text-[#111827]'}`}
+              style={{ fontFamily: SERIF }}>
+              {metric.value}
+            </p>
+            {metric.strike && (
+              <p className="text-[10px] text-[#9CA3AF] line-through mt-0.5">{metric.strike}</p>
+            )}
           </div>
+        ))}
+      </div>
+
+      {/* Investment reason + CTA */}
+      <div className="px-5 py-4 bg-[#FAFAF8] border-t border-[#F3F4F6] flex items-center justify-between gap-3 mt-auto">
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] font-semibold text-[#047857] leading-snug truncate">
+            {deal.investmentFitLabel}
+          </p>
           {deal.investmentReasons[0] && (
-            <p className="text-[11px] text-[#047857] text-center leading-snug mb-3 max-w-[130px]">
+            <p className="text-[11px] text-[#6B7280] leading-snug truncate mt-0.5">
               {deal.investmentReasons[0]}
             </p>
           )}
-          {openError && (
-            <p className="text-[11px] text-[#DC2626] text-center mb-2">{openError}</p>
-          )}
-          <button
-            type="button"
-            onClick={e => { e.stopPropagation(); onOpen() }}
-            disabled={isOpening}
-            className="w-full bg-[#047857] text-white text-xs font-semibold py-2 rounded-xl hover:bg-[#065F46] transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5">
-            {isOpening ? <><Spinner className="w-3 h-3" /> Loading…</> : 'View Deal →'}
-          </button>
         </div>
-
+        {openError && (
+          <p className="text-[11px] text-[#DC2626] shrink-0">{openError}</p>
+        )}
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); onOpen() }}
+          disabled={isOpening}
+          className="shrink-0 bg-[#047857] text-white text-xs font-semibold px-4 py-2 rounded-xl hover:bg-[#065F46] transition-colors disabled:opacity-60 flex items-center gap-1.5">
+          {isOpening ? <><Spinner className="w-3 h-3" />Loading…</> : 'View Deal →'}
+        </button>
       </div>
+
     </div>
   )
 }
@@ -1062,7 +1056,7 @@ export function DealFinder({
                       <p className="text-sm text-[#9CA3AF]">No deals match this filter</p>
                     </div>
                   ) : (
-                    <div className="space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {drillDownDeals.map(deal => (
                         <DrillDownCard
                           key={deal.id}
