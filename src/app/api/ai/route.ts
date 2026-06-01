@@ -163,6 +163,15 @@ CITY CONTEXT (${cityName}):
 - Tenant demand score: ${(cityData as Record<string, unknown>).demandScore}/100
 - Regeneration score: ${(cityData as Record<string, unknown>).regenerationScore}/100
 
+HMO STATUS:
+- Register status: ${enriched?.hmoLicensed ? 'Confirmed licensed HMO' : 'Not found on HMO register'}
+- Nearby licensed HMOs within 0.5 miles: ${enriched?.hmoNearbyCount ?? 0}
+- Article 4 signal: ${(enriched?.hmo as Record<string, unknown>)?.articleFourSignal ?? 'not checked — Phase 2'}
+- HMO verdict: ${enriched?.hmoVerdict ?? 'insufficient data'}
+- HMO potential score: ${enriched?.hmoScore ?? 'N/A'}/100
+- Size compliant: ${(enriched?.hmo as Record<string, unknown>)?.sizeCompliant ?? 'unknown'}
+- EPC compliant for HMO: ${(enriched?.hmo as Record<string, unknown>)?.epcCompliant ?? 'unknown'}
+
 INSTRUCTIONS FOR THIS PROPERTY:
 When the user asks about yield, rent, or investment return, apply the 5-step gross yield methodology above using the Land Registry transaction history and platform-calculated metrics as your data sources. Always output results in the specified format with a confidence score and reasoning. Note that platform rent is estimated — flag if user should verify with local agents. If the last sold price differs materially from the estimated current value, explain the gap using ${cityName} capital growth data.`
 }
