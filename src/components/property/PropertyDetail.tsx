@@ -1511,6 +1511,16 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                       {epcKnown && <p className="text-sm text-[#6B7280]">Score: {String(epc?.current_energy_efficiency ?? '?')}/100 · Potential: {String(epc?.potential_energy_efficiency ?? '?')}/100</p>}
                       {epcKnown && <p className="text-sm text-[#6B7280]">Cert date: {String(epc?.last_epc_date ?? epc?.inspection_date ?? 'Unknown')}</p>}
                       {epc?.source === 'epc_open_data' && <p className="text-xs text-[#9CA3AF] mt-0.5">Source: EPC Open Data Register</p>}
+                      {(epc as Record<string, unknown>)?.estimated && (
+                        <p className="text-xs text-[#B7791F] mt-1">
+                          ⚠ EPC rating estimated from nearest property on same street — not a confirmed certificate for this address.
+                        </p>
+                      )}
+                      {(epc as Record<string, unknown>)?.source === 'propertydata_estimated' && (
+                        <p className="text-xs text-[#9CA3AF] mt-0.5">
+                          Source: PropertyData street average · Verify at epc.opendatacommunities.org
+                        </p>
+                      )}
                       {epcKnown && !epcCompliant && (
                         <p className="text-sm text-[#DC2626] mt-1 font-medium">Estimated upgrade cost: £4,000–£12,000 depending on works needed</p>
                       )}
