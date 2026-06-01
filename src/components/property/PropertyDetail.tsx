@@ -1608,7 +1608,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               const epcCompliant = (hmo?.epcCompliant as boolean | null)     ?? null
               const sizeOk       = (hmo?.sizeCompliant as boolean | null)    ?? null
 
-              const tenureRaw = String(p?.tenure || '').toLowerCase()
+              const tenureRaw = String(
+                p?.tenure ||
+                enriched?.attrTenureLabel ||
+                tenureLabel ||
+                ''
+              ).toLowerCase()
               const tenureDisplay = tenureRaw.includes('freehold') ? 'Freehold'
                 : tenureRaw.includes('leasehold') ? 'Leasehold'
                 : 'Unknown'
@@ -1684,7 +1689,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                         <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B7280] mb-0.5">Article 4 Signal</p>
                         <p className="text-sm font-medium text-[#374151]">
                           {(() => {
-                            const signal = (hmo as Record<string, unknown> | null)?.articleFourSignal as string
+                            const signal = String(
+                              (enriched as Record<string, unknown>)?.hmoArticleFourSignal ||
+                              (hmo as Record<string, unknown> | null)?.articleFourSignal ||
+                              'not_checked'
+                            )
                             if (signal === 'likely_restricted') return '⚠ Likely restricted — planning required'
                             if (signal === 'likely_permitted') return '✓ No restriction detected'
                             return '⚠ Unconfirmed — verify with council'
@@ -1813,9 +1822,19 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                           <p className="text-xs text-[#6B7280] mt-0.5">Some councils restrict new HMOs via Article 4 — requires planning permission.</p>
                         </div>
                         {(() => {
-                          const signal = (hmo as Record<string, unknown> | null)?.articleFourSignal as string
-                          const refusals = Number((hmo as Record<string, unknown> | null)?.planningRefusals ?? 0)
-                          const approvals = Number((hmo as Record<string, unknown> | null)?.planningApprovals ?? 0)
+                          const signal = String(
+                            (enriched as Record<string, unknown>)?.hmoArticleFourSignal ||
+                            (hmo as Record<string, unknown> | null)?.articleFourSignal ||
+                            'not_checked'
+                          )
+                          const refusals = Number(
+                            (enriched as Record<string, unknown>)?.hmoPlanningRefusals ??
+                            (hmo as Record<string, unknown> | null)?.planningRefusals ?? 0
+                          )
+                          const approvals = Number(
+                            (enriched as Record<string, unknown>)?.hmoPlanningApprovals ??
+                            (hmo as Record<string, unknown> | null)?.planningApprovals ?? 0
+                          )
                           if (signal === 'likely_restricted') {
                             return (
                               <span className="flex-shrink-0 text-xs font-semibold text-white bg-[#DC2626] px-2.5 py-1 rounded-full">
