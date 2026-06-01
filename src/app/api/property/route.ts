@@ -30,7 +30,9 @@ interface HmoResult {
   mandatoryLicensing:  boolean
   verdict:             'licensed' | 'strong_potential' | 'possible' | 'restricted' | 'insufficient_data'
   hmoScore:            number
-  articleFourSignal:   string
+  articleFourSignal:   'likely_restricted' | 'likely_permitted' | 'unknown' | 'not_checked'
+  planningRefusals:    number
+  planningApprovals:   number
   rawRecords:          HmoRecord[]
 }
 
@@ -58,15 +60,30 @@ async function fetchHmoData(
   epcRating: string,
   apiKey:    string,
 ): Promise<HmoResult | null> {
-  const url = `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`
-  const res = await fetch(url, { cache: 'no-store' })
-  if (!res.ok) return null
+  const [hmoRes, planningRes] = await Promise.allSettled([
+    fetch(
+      `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
+      { cache: 'no-store' }
+    ),
+    fetch(
+      `https://api.propertydata.co.uk/planning-applications?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
+      { cache: 'no-store' }
+    ),
+  ])
 
-  const json = await res.json() as { status?: string; data?: { hmos?: HmoRecord[] } | HmoRecord[] }
-  const hmoArray = Array.isArray(json.data) ? json.data : ((json.data as { hmos?: HmoRecord[] })?.hmos ?? [])
-  if (json.status !== 'success' || hmoArray.length === 0) return null
+  // Process HMO register response
+  const hmoResponse = hmoRes.status === 'fulfilled' && hmoRes.value.ok
+    ? await hmoRes.value.json() as { status?: string; data?: Array<Record<string, unknown>> | HmoRecord[] }
+    : null
 
-  const records: HmoRecord[] = hmoArray
+  // Process planning applications response
+  const planningResponse = planningRes.status === 'fulfilled' && planningRes.value.ok
+    ? await planningRes.value.json() as { status?: string; data?: Array<Record<string, unknown>> }
+    : null
+
+  if (!hmoResponse || hmoResponse.status !== 'success' || !Array.isArray(hmoResponse.data)) return null
+
+  const records: HmoRecord[] = hmoResponse.data as HmoRecord[]
 
   // 1. Is THIS property licensed?
   const thisRecord = records.find(r => matchHmoAddress(r.address ?? '', address))
@@ -92,6 +109,63 @@ async function fetchHmoData(
   // 5. Mandatory licensing threshold
   const mandatoryLicensing = bedrooms >= 5
 
+  // Article 4 Direction — scan planning applications for HMO signals
+  let articleFourSignal: HmoResult['articleFourSignal'] = 'unknown'
+  let planningRefusals = 0
+  let planningApprovals = 0
+
+  if (planningResponse?.status === 'success' && Array.isArray(planningResponse?.data)) {
+    const applications = planningResponse.data
+    const threeYearsAgo = new Date()
+    threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
+
+    const hmoKeywords = [
+      'hmo', 'house in multiple occupation', 'article 4',
+      'c3 to c4', 'change of use', 'sui generis',
+      'permitted development', 'multiple occupancy'
+    ]
+    const restrictionKeywords = [
+      'article 4', 'refused', 'refusal', 'not permitted',
+      'planning permission required', 'permitted development removed'
+    ]
+    const approvalKeywords = [
+      'approved', 'granted', 'permitted', 'allowed'
+    ]
+
+    for (const app of applications) {
+      const description = String(app.description || app.proposal || '').toLowerCase()
+      const decision    = String(app.decision || app.status || '').toLowerCase()
+      const dateStr     = String(app.decision_date || app.date || '')
+      const appDate     = dateStr ? new Date(dateStr) : null
+
+      // Only consider applications from last 3 years
+      if (appDate && appDate < threeYearsAgo) continue
+
+      // Check if this application is HMO-related
+      const isHmoRelated = hmoKeywords.some(kw => description.includes(kw))
+      if (!isHmoRelated) continue
+
+      const isRefusal  = restrictionKeywords.some(kw => decision.includes(kw) || description.includes(kw))
+      const isApproval = approvalKeywords.some(kw => decision.includes(kw))
+
+      if (isRefusal) planningRefusals++
+      else if (isApproval) planningApprovals++
+    }
+
+    if (planningRefusals >= 2) {
+      articleFourSignal = 'likely_restricted'
+    } else if (planningApprovals >= 2 && planningRefusals === 0) {
+      articleFourSignal = 'likely_permitted'
+    } else {
+      articleFourSignal = 'unknown'
+    }
+
+    console.log(`Article 4 signal for ${postcode}: ${articleFourSignal} (${planningRefusals} refusals, ${planningApprovals} approvals)`)
+  } else {
+    // No planning data available — mark as not checked only when API key was used but no data returned
+    articleFourSignal = planningResponse === null ? 'not_checked' : 'unknown'
+  }
+
   // 6. HMO Score (0–100)
   let score = 0
   if (isLicensed)                     score += 40
@@ -101,11 +175,16 @@ async function fetchHmoData(
   if (bedrooms >= 4)                   score += 15
   else if (bedrooms >= 3)              score += 8
   if (sizeCompliant === true)          score += 10
-  const hmoScore = Math.min(100, score)
+  // Article 4 adjustment
+  if (articleFourSignal === 'likely_restricted') score -= 20
+  else if (articleFourSignal === 'likely_permitted') score += 10
+  const hmoScore = Math.min(100, Math.max(0, score))
 
   // 7. Verdict
   let verdict: HmoResult['verdict']
-  if (isLicensed) {
+  if (articleFourSignal === 'likely_restricted' && !isLicensed) {
+    verdict = 'restricted'
+  } else if (isLicensed) {
     verdict = 'licensed'
   } else if (epcCompliant === false) {
     verdict = 'restricted'
@@ -128,7 +207,9 @@ async function fetchHmoData(
     mandatoryLicensing,
     verdict,
     hmoScore,
-    articleFourSignal:   'not checked — Phase 2',
+    articleFourSignal,
+    planningRefusals,
+    planningApprovals,
     rawRecords:          records.slice(0, 10),
   }
 }
@@ -1583,4 +1664,3 @@ async function fetchLrData(
     return empty
   }
 }
-// redeploy Mon  1 Jun 2026 14:51:50 BST
