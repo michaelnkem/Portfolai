@@ -1675,11 +1675,22 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   {hmoVerdict === 'strong_potential' && (
                     <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-2xl px-6 py-5">
                       <p className="text-sm font-semibold text-[#B7791F] mb-1">🏠 Strong HMO Conversion Potential</p>
-                      <p className="text-xs text-[#92400E] leading-relaxed">
+                      <p className="text-xs text-[#92400E] leading-relaxed mb-3">
                         Not currently on the HMO register but the property profile, bedroom count, and local demand strongly
                         suggest viable conversion. {hmoNearby > 0 && `${hmoNearby} licensed HMO${hmoNearby > 1 ? 's' : ''} already operate within 0.5 miles — demand is proven.`}
                         {' '}Always obtain an HMO licence before letting to 5 or more occupants.
                       </p>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B7280] mb-0.5">Article 4 Signal</p>
+                        <p className="text-sm font-medium text-[#374151]">
+                          {(() => {
+                            const signal = (hmo as Record<string, unknown> | null)?.articleFourSignal as string
+                            if (signal === 'likely_restricted') return '⚠ Likely restricted — planning required'
+                            if (signal === 'likely_permitted') return '✓ No restriction detected'
+                            return '⚠ Unconfirmed — verify with council'
+                          })()}
+                        </p>
+                      </div>
                     </div>
                   )}
 
@@ -1801,9 +1812,37 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                           <p className="text-sm font-semibold text-[#111827]">Article 4 Direction</p>
                           <p className="text-xs text-[#6B7280] mt-0.5">Some councils restrict new HMOs via Article 4 — requires planning permission.</p>
                         </div>
-                        <span className="flex-shrink-0 text-xs font-bold px-3 py-1 rounded-full border bg-[#F3F4F6] text-[#6B7280] border-[#E5E7EB]">
-                          ? Phase 2
-                        </span>
+                        {(() => {
+                          const signal = (hmo as Record<string, unknown> | null)?.articleFourSignal as string
+                          const refusals = Number((hmo as Record<string, unknown> | null)?.planningRefusals ?? 0)
+                          const approvals = Number((hmo as Record<string, unknown> | null)?.planningApprovals ?? 0)
+                          if (signal === 'likely_restricted') {
+                            return (
+                              <span className="flex-shrink-0 text-xs font-semibold text-white bg-[#DC2626] px-2.5 py-1 rounded-full">
+                                ✗ Likely restricted — {refusals} refusal{refusals !== 1 ? 's' : ''} found
+                              </span>
+                            )
+                          }
+                          if (signal === 'likely_permitted') {
+                            return (
+                              <span className="flex-shrink-0 text-xs font-semibold text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-1 rounded-full">
+                                ✓ No restriction detected — {approvals} approval{approvals !== 1 ? 's' : ''} found
+                              </span>
+                            )
+                          }
+                          if (signal === 'unknown') {
+                            return (
+                              <span className="flex-shrink-0 text-xs font-semibold text-[#B7791F] bg-[#FFF7E6] border border-[#F5D48A] px-2.5 py-1 rounded-full">
+                                ⚠ Unconfirmed — verify with council
+                              </span>
+                            )
+                          }
+                          return (
+                            <span className="flex-shrink-0 text-xs text-[#9CA3AF] bg-[#F6F3EC] px-2.5 py-1 rounded-full">
+                              Not checked
+                            </span>
+                          )
+                        })()}
                       </div>
                       {/* Room sizes */}
                       <div className="px-6 py-4 flex items-center justify-between gap-4">
