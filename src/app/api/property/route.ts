@@ -62,10 +62,11 @@ async function fetchHmoData(
   const res = await fetch(url, { cache: 'no-store' })
   if (!res.ok) return null
 
-  const json = await res.json() as { status?: string; data?: HmoRecord[] }
-  if (json.status !== 'success' || !Array.isArray(json.data)) return null
+  const json = await res.json() as { status?: string; data?: { hmos?: HmoRecord[] } | HmoRecord[] }
+  const hmoArray = Array.isArray(json.data) ? json.data : ((json.data as { hmos?: HmoRecord[] })?.hmos ?? [])
+  if (json.status !== 'success' || hmoArray.length === 0) return null
 
-  const records: HmoRecord[] = json.data
+  const records: HmoRecord[] = hmoArray
 
   // 1. Is THIS property licensed?
   const thisRecord = records.find(r => matchHmoAddress(r.address ?? '', address))
