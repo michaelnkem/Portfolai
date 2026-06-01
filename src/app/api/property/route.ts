@@ -81,6 +81,8 @@ async function fetchHmoData(
     ? await planningRes.value.json() as { status?: string; data?: Array<Record<string, unknown>> }
     : null
 
+  console.log(`Planning applications for ${postcode}: status=${planningResponse?.status} count=${Array.isArray(planningResponse?.data) ? planningResponse.data.length : 0}`)
+
   if (!hmoResponse || hmoResponse.status !== 'success' || !Array.isArray(hmoResponse.data)) return null
 
   const records: HmoRecord[] = hmoResponse.data as HmoRecord[]
@@ -164,6 +166,7 @@ async function fetchHmoData(
   } else {
     // No planning data available — mark as not checked only when API key was used but no data returned
     articleFourSignal = planningResponse === null ? 'not_checked' : 'unknown'
+    console.log(`Article 4 signal: ${articleFourSignal} (${planningRefusals} refusals, ${planningApprovals} approvals)`)
   }
 
   // 6. HMO Score (0–100)
@@ -430,11 +433,14 @@ export async function GET(req: NextRequest) {
           attrGardenLabel:        attrs.gardenLabel,
           attrGardenInferred:     attrs.gardenInferred,
           // HMO Intelligence — Phase 1
-          hmo:            hmoResult,
-          hmoVerdict:     hmoResult?.verdict         ?? null,
-          hmoScore:       hmoResult?.hmoScore        ?? null,
-          hmoLicensed:    hmoResult?.isLicensed      ?? false,
-          hmoNearbyCount: hmoResult?.nearbyWithin05Miles ?? 0,
+          hmo:                   hmoResult,
+          hmoVerdict:            hmoResult?.verdict              ?? null,
+          hmoScore:              hmoResult?.hmoScore             ?? null,
+          hmoLicensed:           hmoResult?.isLicensed           ?? false,
+          hmoNearbyCount:        hmoResult?.nearbyWithin05Miles  ?? 0,
+          hmoArticleFourSignal:  hmoResult?.articleFourSignal    ?? 'not_checked',
+          hmoPlanningRefusals:   hmoResult?.planningRefusals     ?? 0,
+          hmoPlanningApprovals:  hmoResult?.planningApprovals    ?? 0,
         },
       })
     } catch (e) {
