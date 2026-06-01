@@ -366,6 +366,25 @@ async function fetchLiveListings(
       'bmv', 'below market', 'managed property', 'city centre investment',
       'guaranteed rent', 'off plan', 'new development', 'serviced apartment',
       'student property', 'hmo investment', 'portfolio', 'turnkey',
+      'commercial',
+      'office',
+      'retail',
+      'warehouse',
+      'industrial',
+      'mixed use',
+      'mixed-use',
+      'shop',
+      'restaurant',
+      'hotel',
+      'pub',
+      'bar',
+      'care home',
+      'nursing home',
+      'student accommodation',
+      'block of flats',
+      'development site',
+      'land for sale',
+      'development opportunity',
     ]
     const MAX_PRICE = 2_000_000
     const MIN_PRICE = 40_000
@@ -380,6 +399,15 @@ async function fetchLiveListings(
       if (GENERIC_KEYWORDS.some(kw => street.includes(kw))) return false
       if (!/[a-zA-Z]{3,}/.test(street)) return false
       if (street.length < 4) return false
+
+      // Remove commercial property types
+      const propType = String(l.property_type || '').toLowerCase()
+      const isCommercial = [
+        'commercial', 'office', 'retail', 'warehouse',
+        'industrial', 'land', 'hotel', 'other'
+      ].includes(propType)
+      if (isCommercial) return false
+
       return true
     })
 
