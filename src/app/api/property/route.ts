@@ -154,12 +154,18 @@ export async function GET(req: NextRequest) {
 
   if (uprn) {
     try {
-      const [property, epc, transactions, risks] = await Promise.all([
+      const [property, transactions, risks] = await Promise.all([
         getProperty(uprn),
-        getEpc(uprn).catch(() => null),
         getTransactions(uprn).catch(() => []),
         getRisks(uprn).catch(() => []),
       ])
+
+      const propRecordEarly = property as Record<string, unknown> | null
+      const epc = await getEpc(
+        uprn,
+        String(propRecordEarly?.full_address || propRecordEarly?.address || ''),
+        String(propRecordEarly?.postcode || '')
+      ).catch(() => null)
 
       const prop = property || { uprn, full_address: `UPRN ${uprn}`, address: `UPRN ${uprn}` }
       const cityName = detectCity(
