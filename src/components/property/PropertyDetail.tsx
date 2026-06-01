@@ -1608,6 +1608,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               const epcCompliant = (hmo?.epcCompliant as boolean | null)     ?? null
               const sizeOk       = (hmo?.sizeCompliant as boolean | null)    ?? null
 
+              const tenureRaw = String(p?.tenure || '').toLowerCase()
+              const tenureDisplay = tenureRaw.includes('freehold') ? 'Freehold'
+                : tenureRaw.includes('leasehold') ? 'Leasehold'
+                : 'Unknown'
+
               const cityRents = cityName && HMO_ROOM_RENTS[cityName] ? HMO_ROOM_RENTS[cityName] : HMO_ROOM_RENTS['Manchester']
               const beds      = Math.max(propertyBeds, 3)
               const hmoSharedIncome  = cityRents.single  * beds
@@ -1751,7 +1756,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                           epcCompliant === false ? 'bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5]' :
                           'bg-[#F3F4F6] text-[#6B7280] border-[#E5E7EB]'
                         }`}>
-                          {epcCompliant === true ? `✓ ${epcRating ?? '?'}` : epcCompliant === false ? `✗ ${epcRating ?? '?'} — ineligible` : `? ${epcRating ?? 'Unknown'}`}
+                          {epcCompliant === true
+                            ? `✓ ${epcRating !== '?' ? epcRating : 'Unknown'}`
+                            : epcCompliant === false
+                            ? `✗ ${epcRating !== '?' ? epcRating : 'Unknown'} — ineligible`
+                            : (epcRating !== '?' ? epcRating : 'Unknown')}
                         </span>
                       </div>
                       {/* Bedroom count */}
@@ -1777,13 +1786,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                           <p className="text-xs text-[#6B7280] mt-0.5">Leasehold properties may have clauses preventing HMO use — check lease terms.</p>
                         </div>
                         <span className={`flex-shrink-0 text-xs font-bold px-3 py-1 rounded-full border ${
-                          String(p?.tenure ?? '').toLowerCase().includes('freehold')
+                          tenureDisplay === 'Freehold'
                             ? 'bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]'
-                            : String(p?.tenure ?? '').toLowerCase().includes('leasehold')
+                            : tenureDisplay === 'Leasehold'
                             ? 'bg-[#FFF7E6] text-[#B7791F] border-[#F5D48A]'
                             : 'bg-[#F3F4F6] text-[#6B7280] border-[#E5E7EB]'
                         }`}>
-                          {String(p?.tenure ?? 'Unknown') || 'Unknown'}
+                          {tenureDisplay}
                         </span>
                       </div>
                       {/* Article 4 */}
