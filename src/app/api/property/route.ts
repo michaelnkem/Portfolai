@@ -5,6 +5,133 @@ import {
 import type { ComparableSale } from '@/lib/homedata'
 import { MARKET_DATA, calcGrossYield, calcNetYield, calcNetMonthlyIncome } from '@/lib/market-data'
 
+// ── HMO Intelligence — Phase 1 ───────────────────────────────────────────────
+interface HmoRecord {
+  uprn?:            string
+  address?:         string
+  postcode?:        string
+  licence_number?:  string
+  licence_type?:    string
+  bedrooms?:        number
+  occupants?:       number
+  licence_start?:   string
+  licence_end?:     string
+  distance_miles?:  number
+}
+
+interface HmoResult {
+  isLicensed:          boolean
+  licenceNumber:       string | null
+  licenceType:         string | null
+  licenceExpiry:       string | null
+  nearbyWithin05Miles: number
+  epcCompliant:        boolean | null
+  sizeCompliant:       boolean | null
+  mandatoryLicensing:  boolean
+  verdict:             'licensed' | 'strong_potential' | 'possible' | 'restricted' | 'insufficient_data'
+  hmoScore:            number
+  articleFourSignal:   string
+  rawRecords:          HmoRecord[]
+}
+
+function matchHmoAddress(candidateAddress: string, targetAddress: string): boolean {
+  if (!candidateAddress || !targetAddress) return false
+  const normalise = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+  const a = normalise(candidateAddress)
+  const b = normalise(targetAddress)
+  if (a === b) return true
+  // Match on house number + first word of street
+  const numMatch = a.match(/^(\d+[a-z]?)/)
+  if (!numMatch) return false
+  const num = numMatch[1]
+  const streetWordA = a.split(' ')[1] ?? ''
+  const streetWordB = b.split(' ')[1] ?? ''
+  return b.startsWith(num) && streetWordA === streetWordB
+}
+
+async function fetchHmoData(
+  postcode:  string,
+  address:   string,
+  bedrooms:  number,
+  floorArea: number | null,
+  epcRating: string,
+  apiKey:    string,
+): Promise<HmoResult | null> {
+  const url = `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`
+  const res = await fetch(url, { cache: 'no-store' })
+  if (!res.ok) return null
+
+  const json = await res.json() as { status?: string; data?: HmoRecord[] }
+  if (json.status !== 'success' || !Array.isArray(json.data)) return null
+
+  const records: HmoRecord[] = json.data
+
+  // 1. Is THIS property licensed?
+  const thisRecord = records.find(r => matchHmoAddress(r.address ?? '', address))
+  const isLicensed = !!thisRecord
+
+  // 2. Nearby count (within 0.5 miles — API returns distance_miles if available)
+  const nearbyWithin05Miles = records.filter(r =>
+    !matchHmoAddress(r.address ?? '', address) &&
+    (r.distance_miles == null || r.distance_miles <= 0.5)
+  ).length
+
+  // 3. EPC compliance — F/G are ineligible
+  const epcUpper = epcRating?.toUpperCase()
+  const epcCompliant = epcUpper && epcUpper !== 'UNKNOWN'
+    ? !['F', 'G'].includes(epcUpper)
+    : null
+
+  // 4. Size compliance — total floor area ÷ bedrooms ≥ 6.51m²
+  const sizeCompliant = floorArea && bedrooms > 0
+    ? (floorArea / bedrooms) >= 6.51
+    : null
+
+  // 5. Mandatory licensing threshold
+  const mandatoryLicensing = bedrooms >= 5
+
+  // 6. HMO Score (0–100)
+  let score = 0
+  if (isLicensed)                     score += 40
+  if (nearbyWithin05Miles >= 5)        score += 20
+  else if (nearbyWithin05Miles >= 2)   score += 10
+  if (epcCompliant === true)           score += 15
+  if (bedrooms >= 4)                   score += 15
+  else if (bedrooms >= 3)              score += 8
+  if (sizeCompliant === true)          score += 10
+  const hmoScore = Math.min(100, score)
+
+  // 7. Verdict
+  let verdict: HmoResult['verdict']
+  if (isLicensed) {
+    verdict = 'licensed'
+  } else if (epcCompliant === false) {
+    verdict = 'restricted'
+  } else if (hmoScore >= 60 && bedrooms >= 3) {
+    verdict = 'strong_potential'
+  } else if (hmoScore >= 30 || nearbyWithin05Miles > 0) {
+    verdict = 'possible'
+  } else {
+    verdict = 'insufficient_data'
+  }
+
+  return {
+    isLicensed,
+    licenceNumber:       thisRecord?.licence_number ?? null,
+    licenceType:         thisRecord?.licence_type   ?? null,
+    licenceExpiry:       thisRecord?.licence_end    ?? null,
+    nearbyWithin05Miles,
+    epcCompliant,
+    sizeCompliant,
+    mandatoryLicensing,
+    verdict,
+    hmoScore,
+    articleFourSignal:   'not checked — Phase 2',
+    rawRecords:          records.slice(0, 10),
+  }
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const q = searchParams.get('q')
@@ -27,12 +154,18 @@ export async function GET(req: NextRequest) {
 
   if (uprn) {
     try {
-      const [property, epc, transactions, risks] = await Promise.all([
+      const [property, transactions, risks] = await Promise.all([
         getProperty(uprn),
-        getEpc(uprn).catch(() => null),
         getTransactions(uprn).catch(() => []),
         getRisks(uprn).catch(() => []),
       ])
+
+      const propRecordEarly = property as Record<string, unknown> | null
+      const epc = await getEpc(
+        uprn,
+        String(propRecordEarly?.full_address || propRecordEarly?.address || ''),
+        String(propRecordEarly?.postcode || '')
+      ).catch(() => null)
 
       const prop = property || { uprn, full_address: `UPRN ${uprn}`, address: `UPRN ${uprn}` }
       const cityName = detectCity(
@@ -160,6 +293,19 @@ export async function GET(req: NextRequest) {
             ? String(epcOpenSub.current_energy_rating)
             : String(propRecord.current_energy_rating || 'Unknown')
 
+      // HMO Intelligence — Phase 1
+      // Wrapped in catch so it NEVER blocks the page load
+      const hmoResult = process.env.PROPERTYDATA_API_KEY
+        ? await fetchHmoData(
+            postcode,
+            String(propRecord.full_address || propRecord.address || ''),
+            Number(propRecord.bedrooms || 2),
+            epcFloorArea !== null ? epcFloorArea : null,
+            epcRating,
+            process.env.PROPERTYDATA_API_KEY
+          ).catch(() => null)
+        : null
+
       return NextResponse.json({
         uprn,
         property: { ...prop, last_sold_price: lastSoldPrice, last_sold_date: lastSoldDate },
@@ -201,6 +347,12 @@ export async function GET(req: NextRequest) {
           attrTenureInferred:     attrs.tenureInferred,
           attrGardenLabel:        attrs.gardenLabel,
           attrGardenInferred:     attrs.gardenInferred,
+          // HMO Intelligence — Phase 1
+          hmo:            hmoResult,
+          hmoVerdict:     hmoResult?.verdict         ?? null,
+          hmoScore:       hmoResult?.hmoScore        ?? null,
+          hmoLicensed:    hmoResult?.isLicensed      ?? false,
+          hmoNearbyCount: hmoResult?.nearbyWithin05Miles ?? 0,
         },
       })
     } catch (e) {

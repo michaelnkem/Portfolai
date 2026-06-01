@@ -6,6 +6,83 @@ function headers() {
   return { Authorization: `Api-Key ${API_KEY}` }
 }
 
+// ── PropertyData EPC address matching helper ──────────────────────────────────
+function matchEpcAddress(
+  subjectAddress: string,
+  records: Array<{ address: string; score: number; rating: string; inspection_date: string }>
+): { matched: boolean; estimated: boolean; rating: string; score: number; date: string } | null {
+
+  if (!records || records.length === 0) return null
+
+  const subjectNum = subjectAddress.match(/\d+/)?.[0] || ''
+
+  // Step 1 — exact house number match
+  if (subjectNum) {
+    const exact = records.find(r => {
+      const rNum = r.address.match(/\d+/)?.[0] || ''
+      return rNum === subjectNum
+    })
+    if (exact) {
+      return {
+        matched: true,
+        estimated: false,
+        rating: exact.rating,
+        score: exact.score,
+        date: exact.inspection_date,
+      }
+    }
+  }
+
+  // Step 2 — closest house number match
+  if (subjectNum) {
+    const subjectInt = parseInt(subjectNum)
+    let closest = records[0]
+    let closestDiff = Infinity
+
+    for (const r of records) {
+      const rNum = parseInt(r.address.match(/\d+/)?.[0] || '0')
+      const diff = Math.abs(rNum - subjectInt)
+      if (diff < closestDiff) {
+        closestDiff = diff
+        closest = r
+      }
+    }
+
+    // Only use closest match if within 10 house numbers
+    if (closestDiff <= 10 && closest) {
+      return {
+        matched: false,
+        estimated: true,
+        rating: closest.rating,
+        score: closest.score,
+        date: closest.inspection_date,
+      }
+    }
+  }
+
+  // Step 3 — street average as last resort
+  const ratings = records.map(r => r.score).filter(s => s > 0)
+  if (ratings.length >= 3) {
+    const avgScore = Math.round(ratings.reduce((a, b) => a + b, 0) / ratings.length)
+    const avgRating = avgScore >= 92 ? 'A'
+      : avgScore >= 81 ? 'B'
+      : avgScore >= 69 ? 'C'
+      : avgScore >= 55 ? 'D'
+      : avgScore >= 39 ? 'E'
+      : avgScore >= 21 ? 'F' : 'G'
+
+    return {
+      matched: false,
+      estimated: true,
+      rating: avgRating,
+      score: avgScore,
+      date: records[0]?.inspection_date || '',
+    }
+  }
+
+  return null
+}
+
 export interface PropertyRecord {
   uprn: number
   full_address: string
@@ -111,15 +188,75 @@ export async function getProperty(uprn: string): Promise<PropertyRecord | null> 
   return data
 }
 
-// EPC data by UPRN
-export async function getEpc(uprn: string): Promise<EpcData | null> {
+// EPC data by UPRN — with PropertyData fallback
+export async function getEpc(uprn: string, address?: string, postcode?: string): Promise<EpcData | null> {
+  // Source 1 — Homedata
   const res = await fetch(
     `${HOMEDATA_BASE}/api/epc/${uprn}/`,
     { headers: headers(), cache: 'no-store' },
   )
-  if (!res.ok) return null
-  const data = await res.json()
-  return data.data || data
+  if (res.ok) {
+    const data = await res.json()
+    const result = data.data || data
+    if (result?.current_energy_efficiency || result?.current_energy_rating) {
+      return result
+    }
+  }
+
+  // Fallback 3 — PropertyData /energy-efficiency
+  // Only called if Homedata returned nothing
+  // Uses address matching to find exact or nearest property on same street
+  const propertyDataKey = process.env.PROPERTYDATA_API_KEY
+  if (propertyDataKey && postcode) {
+    try {
+      const pdRes = await fetch(
+        `https://api.propertydata.co.uk/energy-efficiency?key=${encodeURIComponent(propertyDataKey)}&postcode=${encodeURIComponent(postcode)}`,
+        { cache: 'no-store' }
+      )
+
+      if (pdRes.ok) {
+        const pdData = await pdRes.json()
+
+        if (pdData?.status === 'success' && Array.isArray(pdData?.energy_efficiency)) {
+          const records = pdData.energy_efficiency as Array<{
+            address: string
+            score: number
+            rating: string
+            inspection_date: string
+          }>
+
+          console.log(`PropertyData EPC: ${records.length} records for ${postcode}`)
+
+          const matchResult = matchEpcAddress(address || '', records)
+
+          if (matchResult) {
+            console.log(`PropertyData EPC match: ${matchResult.matched ? 'exact' : 'estimated'} — rating ${matchResult.rating} score ${matchResult.score}`)
+
+            return {
+              uprn: Number(uprn),
+              current_energy_efficiency: matchResult.score,
+              potential_energy_efficiency: matchResult.score + 5,
+              last_epc_date: matchResult.date,
+              epc_floor_area: 0,
+              construction_age_band: '',
+              epc_id: '',
+              current_energy_rating: matchResult.rating,
+              source: matchResult.matched ? 'propertydata_exact' : 'propertydata_estimated',
+              estimated: matchResult.estimated,
+            } as EpcData & {
+              current_energy_rating: string
+              source: string
+              estimated: boolean
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('PropertyData EPC fallback error:', e)
+    }
+  }
+
+  return null
 }
 
 // Environmental risks

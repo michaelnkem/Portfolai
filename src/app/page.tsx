@@ -794,6 +794,7 @@ export default function Home() {
           {tab === 'property-analysis' && (
             selectedProperty ? (
               <PropertyDetail
+                key={String((selectedProperty.property as Record<string, unknown>)?.uprn ?? '') || 'property-detail'}
                 data={selectedProperty}
                 inline
                 onClose={() => setSelectedProperty(null)}

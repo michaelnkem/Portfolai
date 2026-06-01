@@ -9,6 +9,7 @@ const ALL_CITY_KEYS = Object.keys(MARKET_DATA.cities)
 
 type DealFinderTab = 'ai' | 'custom' | 'saved'
 type SortBy = 'investmentFit' | 'netYield' | 'grossYield' | 'totalROI' | 'askingPrice' | 'newest'
+type DrilldownSort = 'investmentFit' | 'netYield' | 'grossYield' | 'totalROI' | 'cashflow' | 'askingPrice' | 'newest'
 type TenureFilter = 'any' | 'freehold' | 'leasehold'
 type FetchStatus = 'idle' | 'loading' | 'ok' | 'unavailable' | 'error'
 
@@ -33,6 +34,65 @@ export interface DealFinderProps {
   onAddToPortfolio: (data: Record<string, unknown>) => void
   onOpenAnalysis: (data: Record<string, unknown>) => void
   onGoToDiscover: () => void
+}
+
+// ── Favourite helpers ─────────────────────────────────────────────────────────
+
+function dealToFavouritePayload(deal: DealCandidate): Record<string, unknown> {
+  // toggleFavourite() in page.tsx reads property.uprn as the dedup key
+  // Fall back to deal.id so listings without a verified UPRN can still be saved
+  const effectiveUprn = deal.uprn ?? deal.id
+  return {
+    property: {
+      uprn: effectiveUprn,
+      full_address: deal.displayAddress || deal.address,
+      address: deal.address,
+      postcode: deal.postcode,
+      property_type: deal.propertyType ?? '',
+      bedrooms: deal.bedrooms ?? null,
+      bathrooms: deal.bathrooms ?? null,
+      tenure: deal.tenure ?? null,
+      last_sold_price: null,
+    },
+    enriched: {
+      estimatedCurrentValue: deal.estimatedMarketValue ?? deal.askingPrice,
+      estimatedRent: deal.rentEstimateMonthly ?? null,
+      grossYield: deal.grossYield ?? null,
+      netYield: deal.netYield ?? null,
+      totalROI: deal.totalROI ?? null,
+      attrBedrooms: deal.bedrooms ?? null,
+      epcRating: deal.epcRating ?? null,
+      valuationMethod: 'listing_asking_price',
+    },
+    epc: deal.epcRating ? { current_energy_rating: deal.epcRating } : {},
+    cityName: deal.city ?? '',
+    _liveListingContext: {
+      sourceContext: 'homedata_live_listing',
+      liveListingAskingPrice: deal.askingPrice,
+      liveListingPriceSource: deal.askingPrice > 0 ? 'asking_price' : null,
+      imageUrl: deal.imageUrl,
+      listingDate: deal.listingDate,
+      listingId: deal.id,
+      listingStatus: deal.listingStatus,
+    },
+  }
+}
+
+function isDealFavourited(
+  deal: DealCandidate,
+  favourites: Set<string>,
+  favouriteItems: Array<Record<string, unknown>>,
+): boolean {
+  const effectiveId = deal.uprn ?? deal.id
+  if (effectiveId && favourites.has(effectiveId)) return true
+  return favouriteItems.some(item => {
+    const p = item.property as Record<string, unknown> | null
+    if (!p) return false
+    if (deal.uprn && p.uprn && String(p.uprn) === deal.uprn) return true
+    const storedAddr = String(p.full_address ?? p.address ?? '')
+    const dealAddr = deal.displayAddress || deal.address
+    return storedAddr.length > 0 && storedAddr === dealAddr && String(p.postcode ?? '') === (deal.postcode ?? '')
+  })
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -335,6 +395,9 @@ function DealCard({
           className="mt-auto w-full bg-[#047857] text-white text-sm font-semibold py-2.5 rounded-xl hover:bg-[#065F46] transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
           {isOpening ? <><Spinner /> Loading analysis…</> : 'View Analysis →'}
         </button>
+        {deal.agentName && (
+          <p className="text-[10px] text-[#9CA3AF] mt-1 text-center">Listed by {deal.agentName}</p>
+        )}
       </div>
     </div>
   )
@@ -342,23 +405,61 @@ function DealCard({
 
 // ── KPI Row ───────────────────────────────────────────────────────────────────
 
-function KpiRow({ meta }: { meta: DealFinderMeta | null }) {
-  const kpis = [
-    { label: 'Top Deals',      value: meta?.totalDeals != null ? String(meta.totalDeals) : '—', sub: 'Active live listings' },
+function KpiRow({ meta, onTopDealsClick, onNewListingsClick, activeFilter }: {
+  meta: DealFinderMeta | null
+  onTopDealsClick: () => void
+  onNewListingsClick: () => void
+  activeFilter: 'topDeals' | 'newListings' | null
+}) {
+  const staticKpis = [
     { label: 'Avg. Net Yield', value: meta?.avgNetYield != null ? `${meta.avgNetYield.toFixed(1)}%` : '—', sub: 'Across returned deals' },
     { label: 'Avg. Entry',     value: meta?.avgAskingPrice != null ? fmtPrice(meta.avgAskingPrice) : '—', sub: 'Mean asking price' },
     { label: 'Best Net Yield', value: meta?.bestNetYield != null ? `${meta.bestNetYield.toFixed(1)}%` : '—', sub: meta?.bestNetYieldCity ?? '' },
-    { label: 'New Listings',   value: meta?.newListingsCount != null ? String(meta.newListingsCount) : '—', sub: 'This month' },
   ]
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3 mb-5">
-      {kpis.map(k => (
+
+      {/* Top Deals — clickable */}
+      <button
+        type="button"
+        onClick={onTopDealsClick}
+        aria-label="View top deal properties"
+        className={`bg-white border rounded-2xl p-4 shadow-[0_8px_24px_rgba(17,24,39,0.04)] cursor-pointer hover:border-[#A7F3D0] hover:shadow-md transition-all relative text-left w-full ${
+          activeFilter === 'topDeals' ? 'border-[#A7F3D0] bg-[#ECFDF5]' : 'border-[#E7E5DD]'
+        }`}>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Top Deals</p>
+        <p className="font-bold text-2xl text-[#111827] leading-none mb-1" style={{ fontFamily: SERIF }}>
+          {meta?.totalDeals != null ? String(meta.totalDeals) : '—'}
+        </p>
+        <p className="text-[11px] text-[#9CA3AF]">Active live listings</p>
+        <span className="absolute bottom-3 right-3 text-[10px] text-[#9CA3AF]">↓</span>
+      </button>
+
+      {/* Static KPIs */}
+      {staticKpis.map(k => (
         <div key={k.label} className="bg-white border border-[#E7E5DD] rounded-2xl p-4 shadow-[0_8px_24px_rgba(17,24,39,0.04)]">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">{k.label}</p>
           <p className="font-bold text-2xl text-[#111827] leading-none mb-1" style={{ fontFamily: SERIF }}>{k.value}</p>
           {k.sub && <p className="text-[11px] text-[#9CA3AF]">{k.sub}</p>}
         </div>
       ))}
+
+      {/* New Listings — clickable */}
+      <button
+        type="button"
+        onClick={onNewListingsClick}
+        aria-label="View newly listed properties"
+        className={`bg-white border rounded-2xl p-4 shadow-[0_8px_24px_rgba(17,24,39,0.04)] cursor-pointer hover:border-[#A7F3D0] hover:shadow-md transition-all relative text-left w-full ${
+          activeFilter === 'newListings' ? 'border-[#A7F3D0] bg-[#ECFDF5]' : 'border-[#E7E5DD]'
+        }`}>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">New Listings</p>
+        <p className="font-bold text-2xl text-[#111827] leading-none mb-1" style={{ fontFamily: SERIF }}>
+          {meta?.newListingsCount != null ? String(meta.newListingsCount) : '—'}
+        </p>
+        <p className="text-[11px] text-[#9CA3AF]">This month</p>
+        <span className="absolute bottom-3 right-3 text-[10px] text-[#9CA3AF]">↓</span>
+      </button>
+
     </div>
   )
 }
@@ -468,6 +569,8 @@ function SortControl({ sortBy, onChange }: { sortBy: SortBy; onChange: (v: SortB
 
 export function DealFinder({
   favouriteItems,
+  favourites,
+  onToggleFavourite,
   onGoToDiscover,
   onOpenAnalysis,
 }: DealFinderProps) {
@@ -502,6 +605,9 @@ export function DealFinder({
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrors, setOpenErrors] = useState<Record<string, string>>({})
   const [localFavs, setLocalFavs] = useState<Set<string>>(new Set())
+  const [kpiFilter, setKpiFilter] = useState<'topDeals' | 'newListings' | null>(null)
+  const [drillDownSortBy, setDrillDownSortBy] = useState<DrilldownSort>('investmentFit')
+  const drillDownRef = useRef<HTMLDivElement>(null)
 
   // ── Derived favourite profile ─────────────────────────────────────────────
   const profile = useMemo(() => deriveBenchmarkFromFavourites(favouriteItems), [favouriteItems])
@@ -535,7 +641,7 @@ export function DealFinder({
           setAiStatus('ok')
         }
       })
-      .catch(() => setAiStatus('error'))
+      .catch(() => setAiStatus('unavailable'))
   }, [hasFavourites, profile])
 
   // Trigger AI fetch when tab is first shown
@@ -594,7 +700,15 @@ export function DealFinder({
           setCustomStatus('ok')
         }
       })
-      .catch(() => setCustomStatus('error'))
+      .catch((err: unknown) => {
+        // Treat network failures the same as unavailable; only show error for unexpected exceptions
+        const msg = err instanceof Error ? err.message : ''
+        if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('JSON')) {
+          setCustomStatus('unavailable')
+        } else {
+          setCustomStatus('error')
+        }
+      })
   }, [
     selectedCustomCities, customMinPrice, customMaxPrice, customMinYield, customMinNetYield,
     customPropertyTypes, customMinBeds, customMaxBeds, customTenure, customMinROI, profile,
@@ -613,39 +727,142 @@ export function DealFinder({
 
   // ── Open canonical Property Analysis ─────────────────────────────────────
   const openVerifiedAnalysis = useCallback(async (deal: DealCandidate) => {
-    const cardId = deal.id
-    setOpeningId(cardId)
-    setOpenErrors(prev => { const n = { ...prev }; delete n[cardId]; return n })
+    setOpeningId(deal.id)
+    setOpenErrors(prev => { const n = { ...prev }; delete n[deal.id]; return n })
 
-    let uprn = deal.uprn
     try {
-      if (!uprn) {
-        const searchQ = deal.postcode || deal.displayAddress || deal.address
-        const res = await fetch(`/api/property?q=${encodeURIComponent(searchQ)}`)
-        if (res.ok) {
-          const data = await res.json()
-          const suggestions = (data.suggestions ?? []) as Array<Record<string, unknown>>
-          const match = suggestions.find(s => String(s.uprn ?? '').length > 0)
-          uprn = match ? String(match.uprn ?? '') || null : null
+      let uprn = deal.uprn
+      let resolvedViaSearch = false
+
+      // Step 1 — if no UPRN, attempt to resolve via address search
+      if (!uprn && (deal.displayAddress || deal.postcode)) {
+        try {
+          const searchQuery = [deal.displayAddress, deal.postcode].filter(Boolean).join(' ')
+          const searchRes = await fetch(`/api/property?q=${encodeURIComponent(searchQuery)}`)
+          if (searchRes.ok) {
+            const searchData = await searchRes.json()
+            const suggestions = (searchData.suggestions || []) as Array<Record<string, unknown>>
+            if (suggestions.length === 1) {
+              // Single result — use silently
+              uprn = String(suggestions[0].uprn)
+              resolvedViaSearch = true
+            } else if (suggestions.length >= 2 && suggestions.length <= 3) {
+              // 2–3 results — use first silently, notice will explain
+              uprn = String(suggestions[0].uprn)
+              resolvedViaSearch = true
+            } else if (suggestions.length >= 4) {
+              // 4+ results — use first result immediately so analysis loads,
+              // but pass the full list so PropertyDetail can show the picker
+              uprn = String(suggestions[0].uprn)
+              resolvedViaSearch = true
+              ;(window as unknown as Record<string, unknown>)._pendingUprnSuggestions = suggestions
+              ;(window as unknown as Record<string, unknown>)._pendingDeal = deal
+            }
+          }
+        } catch {
+          // Search failed — continue to partial analysis below
         }
       }
 
-      if (!uprn) {
-        setOpenErrors(prev => ({
-          ...prev,
-          [cardId]: 'Unable to open analysis — this listing could not be matched to a verified property record.',
-        }))
+      // Step 2 — if UPRN found (directly or via search), fetch full analysis
+      if (uprn) {
+        const res = await fetch(`/api/property?uprn=${encodeURIComponent(uprn)}`)
+        if (!res.ok) throw new Error(`Property fetch failed: ${res.status}`)
+        const data = await res.json()
+
+        // Override estimated value with listing asking price
+        if (deal.askingPrice && deal.askingPrice > 0 && data?.enriched) {
+          (data.enriched as Record<string, unknown>).estimatedCurrentValue = deal.askingPrice
+          ;(data.enriched as Record<string, unknown>).valuationMethod = 'listing_asking_price'
+        }
+        // Override property attributes with live listing data where available
+        if (data?.property) {
+          const prop = data.property as Record<string, unknown>
+          if (deal.bedrooms != null) prop.bedrooms = deal.bedrooms
+          if (deal.bathrooms != null) prop.bathrooms = deal.bathrooms
+          if (deal.propertyType) prop.property_type = deal.propertyType
+          if (deal.tenure) prop.tenure = deal.tenure
+          if (deal.epcRating && data.epc) {
+            (data.epc as Record<string, unknown>).current_energy_rating = deal.epcRating
+          }
+        }
+
+        const enrichedData: Record<string, unknown> = {
+          ...data,
+          _liveListingContext: {
+            sourceContext: 'homedata_live_listing',
+            liveListingAskingPrice: deal.askingPrice,
+            liveListingPriceSource: deal.askingPrice > 0 ? 'asking_price' : null,
+            imageUrl: deal.imageUrl,
+            listingDate: deal.listingDate,
+            listingId: deal.id,
+            listingStatus: deal.listingStatus,
+            agentName: deal.agentName ?? null,
+          },
+        }
+        if (resolvedViaSearch) {
+          enrichedData._uprn_notice = `Property data sourced from nearest match on ${deal.displayAddress || deal.postcode}. Transaction history may relate to an adjacent property. Investment metrics are based on local market data and remain accurate.`
+        }
+        // Attach suggestions for picker if 4+ results were found
+        const pending = (window as unknown as Record<string, unknown>)._pendingUprnSuggestions
+        const pendingDeal = (window as unknown as Record<string, unknown>)._pendingDeal
+        if (pending && pendingDeal === deal) {
+          enrichedData._uprn_suggestions = pending
+          enrichedData._uprn_notice = `Multiple properties found on ${deal.displayAddress || deal.postcode}. Showing the closest match — select below to refine.`
+          delete (window as unknown as Record<string, unknown>)._pendingUprnSuggestions
+          delete (window as unknown as Record<string, unknown>)._pendingDeal
+        }
+        onOpenAnalysis(enrichedData)
         return
       }
 
-      const res = await fetch(`/api/property?uprn=${encodeURIComponent(uprn)}`)
-      if (!res.ok) throw new Error(`Analysis request failed: ${res.status}`)
-      const data = await res.json()
-      if (!data?.property) throw new Error('Missing property data')
-
-      // Merge live listing context so PropertyDetail can use asking price as purchase basis
-      const enrichedData: Record<string, unknown> = {
-        ...data,
+      // Step 3 — no UPRN found, build partial analysis from listing data
+      const cityKey = deal.city as keyof typeof MARKET_DATA.cities
+      const cityData = MARKET_DATA.cities[cityKey] || MARKET_DATA.cities.London
+      const partialData: Record<string, unknown> = {
+        uprn: null,
+        _partial: true,
+        _uprn_notice: `Full property data unavailable for this listing. Investment metrics shown are calculated from the listing details and local market data.`,
+        property: {
+          full_address: deal.displayAddress || deal.address,
+          address: deal.address || deal.displayAddress,
+          postcode: deal.postcode,
+          property_type: deal.propertyType || '',
+          bedrooms: deal.bedrooms,
+          bathrooms: deal.bathrooms,
+          tenure: deal.tenure || '',
+          last_sold_price: null,
+          last_sold_date: null,
+        },
+        epc: deal.epcRating ? { current_energy_rating: deal.epcRating } : null,
+        transactions: [],
+        risks: [],
+        cityData,
+        cityName: deal.city,
+        enriched: {
+          estimatedRent: deal.rentEstimateMonthly,
+          estimatedCurrentValue: deal.askingPrice,
+          valuationMethod: 'listing_asking_price',
+          valuationConfidence: null,
+          grossYield: deal.grossYield,
+          netYield: deal.netYield,
+          netMonthly: deal.rentEstimateMonthly
+            ? Math.round(deal.rentEstimateMonthly * 0.8 - (deal.askingPrice * 0.015 / 12))
+            : null,
+          capitalGrowth: cityData.capitalGrowth1yr,
+          totalROI: deal.netYield
+            ? parseFloat((deal.netYield + cityData.capitalGrowth1yr).toFixed(1))
+            : null,
+          floodRisk: 'Unknown',
+          epcRating: deal.epcRating || 'Unknown',
+          defaults: {
+            serviceCharge: 0,
+            groundRent: 0,
+            managementFee: 10,
+            maintenanceAllowance: 1.5,
+            voidWeeks: 2,
+          },
+        },
         _liveListingContext: {
           sourceContext: 'homedata_live_listing',
           liveListingAskingPrice: deal.askingPrice,
@@ -654,15 +871,14 @@ export function DealFinder({
           listingDate: deal.listingDate,
           listingId: deal.id,
           listingStatus: deal.listingStatus,
+          agentName: deal.agentName ?? null,
         },
       }
-      onOpenAnalysis(enrichedData)
-    } catch (err) {
-      console.error('[deal-finder] open analysis failed', err)
-      setOpenErrors(prev => ({
-        ...prev,
-        [cardId]: 'Unable to open analysis. Please try searching for this property manually.',
-      }))
+      onOpenAnalysis(partialData)
+
+    } catch (e) {
+      console.error('[deal-finder] open analysis failed', e)
+      setOpenErrors(prev => ({ ...prev, [deal.id]: 'Unable to load property data. Please try again.' }))
     } finally {
       setOpeningId(null)
     }
@@ -704,6 +920,42 @@ export function DealFinder({
 
   const canSearch = selectedCustomCities.length > 0
 
+  const drillDownDeals = useMemo(() => {
+    const source = finderTab === 'custom' ? customDeals : aiDeals
+    if (!kpiFilter) return []
+    let filtered: DealCandidate[]
+    if (kpiFilter === 'topDeals') {
+      filtered = [...source].sort((a, b) => b.investmentFitScore - a.investmentFitScore)
+    } else {
+      filtered = [...source.filter(d => d.listingStatus === 'new_listing')]
+        .sort((a, b) => (b.listingDate ?? '').localeCompare(a.listingDate ?? ''))
+    }
+    switch (drillDownSortBy) {
+      case 'netYield':    return [...filtered].sort((a, b) => (b.netYield ?? 0) - (a.netYield ?? 0))
+      case 'grossYield':  return [...filtered].sort((a, b) => (b.grossYield ?? 0) - (a.grossYield ?? 0))
+      case 'totalROI':    return [...filtered].sort((a, b) => (b.totalROI ?? 0) - (a.totalROI ?? 0))
+      case 'cashflow':    return [...filtered].sort((a, b) => {
+        const aCf = a.netYield != null && a.askingPrice > 0 ? (a.netYield / 100 * a.askingPrice) / 12 : 0
+        const bCf = b.netYield != null && b.askingPrice > 0 ? (b.netYield / 100 * b.askingPrice) / 12 : 0
+        return bCf - aCf
+      })
+      case 'askingPrice': return [...filtered].sort((a, b) => (a.askingPrice ?? Infinity) - (b.askingPrice ?? Infinity))
+      case 'newest':      return [...filtered].sort((a, b) => (b.listingDate ?? '').localeCompare(a.listingDate ?? ''))
+      default:            return filtered
+    }
+  }, [kpiFilter, aiDeals, customDeals, finderTab, drillDownSortBy])
+
+  const handleKpiClick = (filter: 'topDeals' | 'newListings') => {
+    setKpiFilter(prev => {
+      if (prev === filter) return null
+      setDrillDownSortBy(filter === 'newListings' ? 'newest' : 'investmentFit')
+      return filter
+    })
+    setTimeout(() => {
+      drillDownRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -726,7 +978,14 @@ export function DealFinder({
       </div>
 
       {/* KPI row */}
-      {activeMeta && activeStatus === 'ok' && <KpiRow meta={activeMeta} />}
+      {activeMeta && activeStatus === 'ok' && (
+        <KpiRow
+          meta={finderTab === 'custom' ? customMeta : aiMeta}
+          onTopDealsClick={() => handleKpiClick('topDeals')}
+          onNewListingsClick={() => handleKpiClick('newListings')}
+          activeFilter={kpiFilter}
+        />
+      )}
 
       {/* Tab bar */}
       <div className="flex gap-0 border-b border-[#E7E5DD] mb-6">
@@ -802,7 +1061,69 @@ export function DealFinder({
                 <SortControl sortBy={sortBy} onChange={setSortBy} />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+              {kpiFilter !== null && (
+                <div ref={drillDownRef} className="mb-8">
+                  {/* Drill-down header */}
+                  <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setKpiFilter(null)}
+                        className="text-xs font-medium text-[#6B7280] hover:text-[#374151] flex items-center gap-1 transition-colors">
+                        ← Back to overview
+                      </button>
+                      <div className="w-px h-4 bg-[#E7E5DD]" />
+                      <div>
+                        <h2 className="font-bold text-[#111827] text-base leading-none" style={{ fontFamily: SERIF }}>
+                          {kpiFilter === 'topDeals' ? 'Top Deals' : 'New Listings'}
+                        </h2>
+                        <p className="text-[11px] text-[#9CA3AF] mt-0.5">
+                          {kpiFilter === 'topDeals' ? 'All deals ranked by Investment Fit' : 'Listings added most recently'}
+                        </p>
+                      </div>
+                      <span className="text-[11px] font-semibold bg-[#F3F4F6] text-[#374151] px-2.5 py-1 rounded-full">
+                        {drillDownDeals.length} deal{drillDownDeals.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs text-[#6B7280]">Sort:</label>
+                      <select
+                        value={drillDownSortBy}
+                        onChange={e => setDrillDownSortBy(e.target.value as DrilldownSort)}
+                        className="bg-white border border-[#E7E5DD] text-xs font-medium text-[#374151] rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
+                        <option value="investmentFit">Investment Fit</option>
+                        <option value="netYield">Highest net yield</option>
+                        <option value="grossYield">Highest gross yield</option>
+                        <option value="totalROI">Highest total ROI</option>
+                        <option value="cashflow">Highest cashflow</option>
+                        <option value="askingPrice">Lowest price</option>
+                        <option value="newest">Newest first</option>
+                      </select>
+                    </div>
+                  </div>
+                  {drillDownDeals.length === 0 ? (
+                    <div className="bg-white border border-[#E7E5DD] rounded-2xl p-10 text-center">
+                      <p className="text-sm text-[#9CA3AF]">No deals match this filter</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {drillDownDeals.map(deal => (
+                        <DealCard
+                          key={deal.id}
+                          deal={deal}
+                          isFav={isDealFavourited(deal, favourites, favouriteItems)}
+                          isOpening={openingId === deal.id}
+                          openError={openErrors[deal.id] ?? null}
+                          onToggleFav={() => onToggleFavourite(dealToFavouritePayload(deal))}
+                          onOpen={() => openVerifiedAnalysis(deal)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {sortedDeals.map(deal => (
                   <DealCard key={deal.id} deal={deal}
                     isFav={localFavs.has(deal.id)} isOpening={openingId === deal.id}
@@ -1045,13 +1366,74 @@ export function DealFinder({
           {customStatus === 'ok' && customDeals.length === 0 && <NoDealsState onReset={resetCustomFilters} />}
           {customStatus === 'ok' && customDeals.length > 0 && (
             <div>
+              {kpiFilter !== null && (
+                <div ref={drillDownRef} className="mb-8">
+                  {/* Drill-down header */}
+                  <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setKpiFilter(null)}
+                        className="text-xs font-medium text-[#6B7280] hover:text-[#374151] flex items-center gap-1 transition-colors">
+                        ← Back to overview
+                      </button>
+                      <div className="w-px h-4 bg-[#E7E5DD]" />
+                      <div>
+                        <h2 className="font-bold text-[#111827] text-base leading-none" style={{ fontFamily: SERIF }}>
+                          {kpiFilter === 'topDeals' ? 'Top Deals' : 'New Listings'}
+                        </h2>
+                        <p className="text-[11px] text-[#9CA3AF] mt-0.5">
+                          {kpiFilter === 'topDeals' ? 'All deals ranked by Investment Fit' : 'Listings added most recently'}
+                        </p>
+                      </div>
+                      <span className="text-[11px] font-semibold bg-[#F3F4F6] text-[#374151] px-2.5 py-1 rounded-full">
+                        {drillDownDeals.length} deal{drillDownDeals.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs text-[#6B7280]">Sort:</label>
+                      <select
+                        value={drillDownSortBy}
+                        onChange={e => setDrillDownSortBy(e.target.value as DrilldownSort)}
+                        className="bg-white border border-[#E7E5DD] text-xs font-medium text-[#374151] rounded-xl px-3 py-1.5 outline-none focus:border-[#047857] cursor-pointer">
+                        <option value="investmentFit">Investment Fit</option>
+                        <option value="netYield">Highest net yield</option>
+                        <option value="grossYield">Highest gross yield</option>
+                        <option value="totalROI">Highest total ROI</option>
+                        <option value="cashflow">Highest cashflow</option>
+                        <option value="askingPrice">Lowest price</option>
+                        <option value="newest">Newest first</option>
+                      </select>
+                    </div>
+                  </div>
+                  {drillDownDeals.length === 0 ? (
+                    <div className="bg-white border border-[#E7E5DD] rounded-2xl p-10 text-center">
+                      <p className="text-sm text-[#9CA3AF]">No deals match this filter</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {drillDownDeals.map(deal => (
+                        <DealCard
+                          key={deal.id}
+                          deal={deal}
+                          isFav={isDealFavourited(deal, favourites, favouriteItems)}
+                          isOpening={openingId === deal.id}
+                          openError={openErrors[deal.id] ?? null}
+                          onToggleFav={() => onToggleFavourite(dealToFavouritePayload(deal))}
+                          onOpen={() => openVerifiedAnalysis(deal)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
                 <p className="text-sm text-[#374151]">
                   <span className="font-semibold text-[#111827]">{customDeals.length}</span> live {customDeals.length === 1 ? 'deal' : 'deals'} found
                 </p>
                 <SortControl sortBy={sortBy} onChange={setSortBy} />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {sortDeals(customDeals, sortBy).map(deal => (
                   <DealCard key={deal.id} deal={deal}
                     isFav={localFavs.has(deal.id)} isOpening={openingId === deal.id}
