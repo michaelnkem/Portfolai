@@ -673,124 +673,25 @@ export function calculateInvestmentSignals({ postcode, cityName }: InvestmentSig
   }
 }
 
-// ── INVESTMENT FIT SCORING ─────────────────────────────────────────────────
-export interface InvestmentFitInput {
-  askingPrice: number
-  estimatedNetYield: number
-  estimatedGrossYield: number
-  propertyType: string
-  bedrooms: number
-  tenure: string
-  epcRating: string
-  cityName: string
-  hasFloodRisk?: boolean
-  capitalGrowth1yr?: number
+// ── HMO ROOM RENT DATA ─────────────────────────────────────────────────────
+export const HMO_ROOM_RENTS: Record<string, {
+  single: number
+  double: number
+  ensuite: number
+}> = {
+  London:     { single: 900,  double: 1050, ensuite: 1200 },
+  Manchester: { single: 580,  double: 680,  ensuite: 780  },
+  Birmingham: { single: 520,  double: 620,  ensuite: 720  },
+  Liverpool:  { single: 480,  double: 560,  ensuite: 650  },
+  Leeds:      { single: 550,  double: 640,  ensuite: 740  },
+  Sheffield:  { single: 480,  double: 570,  ensuite: 660  },
+  Nottingham: { single: 500,  double: 590,  ensuite: 680  },
+  Bristol:    { single: 680,  double: 780,  ensuite: 880  },
 }
 
-export interface UserBenchmark {
-  avgNetYield: number
-  avgGrossYield: number
-  avgPrice: number
-  preferredTypes: string[]
-  preferredBeds: number[]
-  preferredTenure: string
-  minNetYield: number
-  maxPrice: number
-  minPrice: number
-}
-
-export interface InvestmentFitResult {
-  score: number
-  label: string
-  badge: string
-  badgeColour: string
-  primaryStrength: string
-  breakdown: { returnEfficiency: number; entryPriceEfficiency: number; strategyMatch: number; locationOpportunity: number; riskCompliance: number }
-}
-
-export function calcInvestmentFit(property: InvestmentFitInput, benchmark: UserBenchmark): InvestmentFitResult {
-  const cityData = MARKET_DATA.cities[property.cityName as keyof typeof MARKET_DATA.cities] || null
-  let returnEfficiency = 0
-  if (benchmark.avgNetYield > 0 && property.estimatedNetYield > 0) {
-    const r = property.estimatedNetYield / benchmark.avgNetYield
-    if (r >= 1.3) returnEfficiency = 30
-    else if (r >= 1.1) returnEfficiency = 27
-    else if (r >= 1.0) returnEfficiency = 22
-    else if (r >= 0.9) returnEfficiency = 17
-    else if (r >= 0.8) returnEfficiency = 12
-    else if (r >= 0.7) returnEfficiency = 7
-    else returnEfficiency = 3
-    if (property.estimatedNetYield >= 8.0) returnEfficiency = Math.min(30, returnEfficiency + 3)
-    if (property.estimatedNetYield >= 6.0 && returnEfficiency < 10) returnEfficiency = 10
-  }
-  let entryPriceEfficiency = 0
-  if (benchmark.avgPrice > 0 && property.askingPrice > 0) {
-    const pe = (property.estimatedNetYield / property.askingPrice) * 100000
-    const be = (benchmark.avgNetYield / benchmark.avgPrice) * 100000
-    if (be > 0) {
-      const r = pe / be
-      if (r >= 1.4) entryPriceEfficiency = 25
-      else if (r >= 1.2) entryPriceEfficiency = 22
-      else if (r >= 1.0) entryPriceEfficiency = 18
-      else if (r >= 0.85) entryPriceEfficiency = 13
-      else if (r >= 0.7) entryPriceEfficiency = 8
-      else entryPriceEfficiency = 4
-    }
-    if (property.askingPrice >= benchmark.minPrice && property.askingPrice <= benchmark.maxPrice) entryPriceEfficiency = Math.min(25, entryPriceEfficiency + 2)
-    if (property.askingPrice < benchmark.avgPrice * 0.7) entryPriceEfficiency = Math.min(25, entryPriceEfficiency + 3)
-  }
-  let strategyMatch = 0
-  const ptl = property.propertyType.toLowerCase()
-  const typeMatch = benchmark.preferredTypes.some(t => ptl.includes(t.toLowerCase()) || t.toLowerCase().includes(ptl.split('-')[0]))
-  strategyMatch += typeMatch ? 8 : 3
-  const bedMatch = benchmark.preferredBeds.includes(property.bedrooms)
-  const bedClose = benchmark.preferredBeds.some(b => Math.abs(b - property.bedrooms) === 1)
-  strategyMatch += bedMatch ? 7 : bedClose ? 4 : 1
-  const tl = property.tenure.toLowerCase()
-  if (benchmark.preferredTenure === 'Any') strategyMatch += 4
-  else if (benchmark.preferredTenure.toLowerCase() === tl) strategyMatch += 5
-  else strategyMatch += 1
-  let locationOpportunity = 0
-  if (cityData) {
-    if (cityData.demandScore >= 90) locationOpportunity += 5
-    else if (cityData.demandScore >= 80) locationOpportunity += 4
-    else if (cityData.demandScore >= 70) locationOpportunity += 3
-    else locationOpportunity += 1
-    const sg = 100 - cityData.supplyScore
-    if (sg >= 70) locationOpportunity += 3
-    else if (sg >= 55) locationOpportunity += 2
-    else locationOpportunity += 1
-    const g = property.capitalGrowth1yr ?? cityData.capitalGrowth1yr
-    if (g >= 4.0) locationOpportunity += 4
-    else if (g >= 2.5) locationOpportunity += 3
-    else if (g >= 1.0) locationOpportunity += 2
-    else if (g >= 0) locationOpportunity += 1
-    if (cityData.regenerationScore >= 85) locationOpportunity += 3
-    else if (cityData.regenerationScore >= 70) locationOpportunity += 2
-    else locationOpportunity += 1
-  } else { locationOpportunity = 6 }
-  let riskCompliance = 10
-  const epc = property.epcRating?.toUpperCase()?.charAt(0) || 'D'
-  if (epc === 'G') riskCompliance -= 5
-  else if (epc === 'F') riskCompliance -= 4
-  else if (epc === 'E') riskCompliance -= 2
-  else if (epc === 'D') riskCompliance -= 1
-  if (property.tenure.toLowerCase().includes('leasehold')) riskCompliance -= 2
-  if (property.hasFloodRisk) riskCompliance -= 3
-  riskCompliance = Math.max(0, riskCompliance)
-  const score = Math.min(100, Math.max(0, Math.round(returnEfficiency + entryPriceEfficiency + strategyMatch + locationOpportunity + riskCompliance)))
-  let label: string
-  if (score >= 90) label = 'Exceptional fit'
-  else if (score >= 80) label = 'Strong fit'
-  else if (score >= 70) label = 'Good fit'
-  else if (score >= 60) label = 'Speculative fit'
-  else label = 'Weak fit'
-  let badge: string, badgeColour: 'green'|'blue'|'gold'|'grey', primaryStrength: string
-  if (score >= 90) { badge = 'Top Match'; badgeColour = 'green'; primaryStrength = `${score}% investment fit — matches your strategy` }
-  else if (returnEfficiency >= 25 && property.estimatedNetYield >= benchmark.avgNetYield * 1.15) { const d = (property.estimatedNetYield - benchmark.avgNetYield).toFixed(1); badge = 'High Yield'; badgeColour = 'green'; primaryStrength = `${property.estimatedNetYield}% net yield — ${d}% above your benchmark` }
-  else if (entryPriceEfficiency >= 22 && property.askingPrice < benchmark.avgPrice * 0.75) { const s = Math.round((benchmark.avgPrice - property.askingPrice) / 1000); badge = 'Lower Entry'; badgeColour = 'blue'; primaryStrength = `£${s}k lower entry cost than your typical investment` }
-  else if (locationOpportunity >= 13 && cityData) { const t = (property.estimatedNetYield + (cityData.capitalGrowth1yr || 0)).toFixed(1); badge = 'Strong ROI'; badgeColour = 'gold'; primaryStrength = `${t}% total ROI — strong ${property.cityName} fundamentals` }
-  else if (score >= 70) { badge = 'Good Fit'; badgeColour = 'grey'; primaryStrength = `Solid match across your investment criteria` }
-  else { badge = 'Speculative'; badgeColour = 'grey'; primaryStrength = 'Partial match — review carefully' }
-  return { score, label, badge, badgeColour, primaryStrength, breakdown: { returnEfficiency, entryPriceEfficiency, strategyMatch, locationOpportunity, riskCompliance } }
+export const HMO_MIN_ROOM_SIZES = {
+  singleAdult:  6.51,
+  twoAdults:    10.22,
+  childUnder10: 4.64,
+  absoluteMin:  4.64,
 }
