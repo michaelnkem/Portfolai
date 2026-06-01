@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { LineChart } from '@/components/ui'
 import { PropertySearchBar } from '@/components/property/PropertySearchBar'
-import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcSection24, calcOwnershipComparison, calculateInvestmentSignals, MARKET_DATA } from '@/lib/market-data'
+import { calcSDLT, calcMortgagePayment, calcNetMonthlyIncome, calcSection24, calcOwnershipComparison, calculateInvestmentSignals, MARKET_DATA, HMO_ROOM_RENTS } from '@/lib/market-data'
 import type { Section24Result, ToggleComparison, ExtractionMethod, InvestmentSignals } from '@/lib/market-data'
 
 interface PropertyDetailProps {
@@ -20,7 +20,7 @@ interface PropertyDetailProps {
   inline?: boolean
 }
 
-type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'market' | 'agent'
+type DetailTab = 'overview' | 'financials' | 'history' | 'risks' | 'market' | 'hmo' | 'agent'
 
 const SERIF = 'var(--font-baskerville), "Libre Baskerville", Georgia, serif'
 
@@ -460,6 +460,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
     { id: 'history',    label: 'History'            },
     { id: 'risks',      label: 'Risks'              },
     { id: 'market',     label: 'Market Comparison'  },
+    { id: 'hmo',        label: 'HMO Intelligence'   },
     ...(isLiveListing ? [{ id: 'agent' as DetailTab, label: 'Agent Contact' }] : []),
   ]
 
@@ -1584,6 +1585,239 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 fullWidth
               />
             )}
+
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* HMO INTELLIGENCE TAB                                           */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {tab === 'hmo' && (() => {
+              const hmo = enriched?.hmo as Record<string, unknown> | null | undefined
+              const hmoVerdict   = (enriched?.hmoVerdict  as string  | null) ?? null
+              const hmoScore     = (enriched?.hmoScore    as number  | null) ?? null
+              const hmoLicensed  = (enriched?.hmoLicensed as boolean)        ?? false
+              const hmoNearby    = (enriched?.hmoNearbyCount as number)      ?? 0
+              const epcCompliant = (hmo?.epcCompliant as boolean | null)     ?? null
+              const sizeOk       = (hmo?.sizeCompliant as boolean | null)    ?? null
+
+              const cityRents = cityName && HMO_ROOM_RENTS[cityName] ? HMO_ROOM_RENTS[cityName] : HMO_ROOM_RENTS['Manchester']
+              const beds      = Math.max(propertyBeds, 3)
+              const hmoSharedIncome  = cityRents.single  * beds
+              const hmoEnsuiteIncome = cityRents.ensuite * beds
+              const singleLetRent    = enriched?.estimatedRent ? Number(enriched.estimatedRent) : effectiveRent ?? 0
+
+              const scoreBadgeClass = hmoScore === null ? 'bg-[#F3F4F6] text-[#6B7280]'
+                : hmoScore >= 65 ? 'bg-[#ECFDF5] text-[#047857]'
+                : hmoScore >= 40 ? 'bg-[#FFF7E6] text-[#B7791F]'
+                : 'bg-[#FEF2F2] text-[#DC2626]'
+
+              const noApiKey = !hmo && !hmoVerdict
+
+              return (
+                <div className="space-y-5">
+
+                  {/* ── Header card ─────────────────────────────────────────── */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] overflow-hidden">
+                    <div className="px-6 py-5 flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-1">HMO Intelligence</p>
+                        <p className="text-xl font-bold text-[#111827]" style={{ fontFamily: SERIF }}>
+                          House in Multiple Occupation Analysis
+                        </p>
+                        <p className="text-xs text-[#9CA3AF] mt-1">
+                          National HMO register check · EPC & size compliance · income uplift estimate
+                        </p>
+                      </div>
+                      {hmoScore !== null && (
+                        <div className={`flex-shrink-0 flex flex-col items-center justify-center rounded-xl px-4 py-3 ${scoreBadgeClass}`}>
+                          <span className="text-2xl font-black">{hmoScore}</span>
+                          <span className="text-[10px] font-semibold uppercase tracking-wider mt-0.5">/ 100</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ── Verdict block ───────────────────────────────────────── */}
+                  {noApiKey && (
+                    <div className="bg-[#F9FAFB] border border-[#E5E7EB] rounded-2xl px-6 py-5">
+                      <p className="text-sm font-semibold text-[#374151] mb-1">🔑 HMO Register Data Unavailable</p>
+                      <p className="text-xs text-[#6B7280] leading-relaxed">
+                        Connect a PropertyData API key in your environment variables to enable live HMO register lookups,
+                        nearby licensed HMO counts, and Article 4 direction signals.
+                      </p>
+                    </div>
+                  )}
+
+                  {hmoVerdict === 'licensed' && (
+                    <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-2xl px-6 py-5">
+                      <p className="text-sm font-semibold text-[#047857] mb-1">✅ Confirmed Licensed HMO</p>
+                      <p className="text-xs text-[#065F46] leading-relaxed">
+                        This property is recorded on the national HMO register as a licensed HMO.
+                        Estimated monthly income at current room rates:{' '}
+                        <strong>£{hmoSharedIncome.toLocaleString()} – £{hmoEnsuiteIncome.toLocaleString()}</strong> depending on room specification.
+                      </p>
+                    </div>
+                  )}
+
+                  {hmoVerdict === 'strong_potential' && (
+                    <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-2xl px-6 py-5">
+                      <p className="text-sm font-semibold text-[#B7791F] mb-1">🏠 Strong HMO Conversion Potential</p>
+                      <p className="text-xs text-[#92400E] leading-relaxed">
+                        Not currently on the HMO register but the property profile, bedroom count, and local demand strongly
+                        suggest viable conversion. {hmoNearby > 0 && `${hmoNearby} licensed HMO${hmoNearby > 1 ? 's' : ''} already operate within 0.5 miles — demand is proven.`}
+                        {' '}Always obtain an HMO licence before letting to 5 or more occupants.
+                      </p>
+                    </div>
+                  )}
+
+                  {hmoVerdict === 'restricted' && (
+                    <div className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-2xl px-6 py-5">
+                      <p className="text-sm font-semibold text-[#DC2626] mb-1">🚫 HMO Not Recommended</p>
+                      <p className="text-xs text-[#991B1B] leading-relaxed">
+                        One or more critical compliance barriers identified (EPC rating, tenure, or room size).
+                        Proceeding without rectifying these issues could result in civil penalties and licence refusal.
+                      </p>
+                    </div>
+                  )}
+
+                  {(hmoVerdict === 'possible' || hmoVerdict === 'insufficient_data') && (
+                    <div className="bg-[#F9FAFB] border border-[#E5E7EB] rounded-2xl px-6 py-5">
+                      <p className="text-sm font-semibold text-[#374151] mb-1">ℹ️ Possible HMO — Limited Data</p>
+                      <p className="text-xs text-[#6B7280] leading-relaxed">
+                        {hmoNearby > 0
+                          ? `${hmoNearby} licensed HMO${hmoNearby > 1 ? 's' : ''} within 0.5 miles suggests demand exists, but further due diligence is required.`
+                          : 'Insufficient data to make a strong recommendation. Verify locally with the council and a specialist HMO broker.'}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* ── Income comparison ───────────────────────────────────── */}
+                  {(hmoVerdict === 'licensed' || hmoVerdict === 'strong_potential' || hmoVerdict === 'possible') && (
+                    <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] overflow-hidden">
+                      <div className="px-6 py-4 border-b border-[#F3F4F6]">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">Monthly Income Comparison</p>
+                      </div>
+                      <div className="grid grid-cols-3 divide-x divide-[#F3F4F6]">
+                        <div className="px-5 py-4 text-center">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-[#9CA3AF] mb-2">Single Let</p>
+                          <p className="text-xl font-black text-[#111827]">£{singleLetRent.toLocaleString()}</p>
+                          <p className="text-[10px] text-[#9CA3AF] mt-1">per month</p>
+                        </div>
+                        <div className="px-5 py-4 text-center bg-[#FFFBEB]">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-[#B7791F] mb-2">HMO Shared Bath</p>
+                          <p className="text-xl font-black text-[#B7791F]">£{hmoSharedIncome.toLocaleString()}</p>
+                          <p className="text-[10px] text-[#B7791F] mt-1">
+                            {singleLetRent > 0 ? `+${Math.round(((hmoSharedIncome / singleLetRent) - 1) * 100)}% uplift` : `${beds} rooms`}
+                          </p>
+                        </div>
+                        <div className="px-5 py-4 text-center bg-[#ECFDF5]">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-[#047857] mb-2">HMO En-suite</p>
+                          <p className="text-xl font-black text-[#047857]">£{hmoEnsuiteIncome.toLocaleString()}</p>
+                          <p className="text-[10px] text-[#047857] mt-1">
+                            {singleLetRent > 0 ? `+${Math.round(((hmoEnsuiteIncome / singleLetRent) - 1) * 100)}% uplift` : `${beds} rooms`}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="px-6 py-3 bg-[#F9FAFB] border-t border-[#F3F4F6]">
+                        <p className="text-[10px] text-[#9CA3AF]">
+                          Room rents based on {cityName ?? 'regional'} averages · {beds} rooms assumed · Actual income depends on specification and occupancy
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Compliance checklist ────────────────────────────────── */}
+                  <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] overflow-hidden">
+                    <div className="px-6 py-4 border-b border-[#F3F4F6]">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">HMO Compliance Checklist</p>
+                    </div>
+                    <div className="divide-y divide-[#F9FAFB]">
+                      {/* EPC */}
+                      <div className="px-6 py-4 flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-[#111827]">EPC Rating</p>
+                          <p className="text-xs text-[#6B7280] mt-0.5">Minimum EPC E required for any rental. EPC C target by 2028.</p>
+                        </div>
+                        <span className={`flex-shrink-0 text-xs font-bold px-3 py-1 rounded-full border ${
+                          epcCompliant === true  ? 'bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]' :
+                          epcCompliant === false ? 'bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5]' :
+                          'bg-[#F3F4F6] text-[#6B7280] border-[#E5E7EB]'
+                        }`}>
+                          {epcCompliant === true ? `✓ ${epcRating ?? '?'}` : epcCompliant === false ? `✗ ${epcRating ?? '?'} — ineligible` : `? ${epcRating ?? 'Unknown'}`}
+                        </span>
+                      </div>
+                      {/* Bedroom count */}
+                      <div className="px-6 py-4 flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-[#111827]">Bedroom Count</p>
+                          <p className="text-xs text-[#6B7280] mt-0.5">Mandatory licensing applies to properties let to 5+ people in 2+ households.</p>
+                        </div>
+                        <span className={`flex-shrink-0 text-xs font-bold px-3 py-1 rounded-full border ${
+                          propertyBeds >= 5 ? 'bg-[#FFF7E6] text-[#B7791F] border-[#F5D48A]' :
+                          propertyBeds >= 3 ? 'bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]' :
+                          'bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5]'
+                        }`}>
+                          {propertyBeds >= 5 ? `⚠ ${propertyBeds} beds — mandatory licence` :
+                           propertyBeds >= 3 ? `✓ ${propertyBeds} beds — licensable` :
+                           `✗ ${propertyBeds} beds — too few`}
+                        </span>
+                      </div>
+                      {/* Tenure */}
+                      <div className="px-6 py-4 flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-[#111827]">Tenure</p>
+                          <p className="text-xs text-[#6B7280] mt-0.5">Leasehold properties may have clauses preventing HMO use — check lease terms.</p>
+                        </div>
+                        <span className={`flex-shrink-0 text-xs font-bold px-3 py-1 rounded-full border ${
+                          String(p?.tenure ?? '').toLowerCase().includes('freehold')
+                            ? 'bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]'
+                            : String(p?.tenure ?? '').toLowerCase().includes('leasehold')
+                            ? 'bg-[#FFF7E6] text-[#B7791F] border-[#F5D48A]'
+                            : 'bg-[#F3F4F6] text-[#6B7280] border-[#E5E7EB]'
+                        }`}>
+                          {String(p?.tenure ?? 'Unknown') || 'Unknown'}
+                        </span>
+                      </div>
+                      {/* Article 4 */}
+                      <div className="px-6 py-4 flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-[#111827]">Article 4 Direction</p>
+                          <p className="text-xs text-[#6B7280] mt-0.5">Some councils restrict new HMOs via Article 4 — requires planning permission.</p>
+                        </div>
+                        <span className="flex-shrink-0 text-xs font-bold px-3 py-1 rounded-full border bg-[#F3F4F6] text-[#6B7280] border-[#E5E7EB]">
+                          ? Phase 2
+                        </span>
+                      </div>
+                      {/* Room sizes */}
+                      <div className="px-6 py-4 flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-[#111827]">Room Size Compliance</p>
+                          <p className="text-xs text-[#6B7280] mt-0.5">Minimum 6.51m² per single adult room (Housing Act 2004).</p>
+                        </div>
+                        <span className={`flex-shrink-0 text-xs font-bold px-3 py-1 rounded-full border ${
+                          sizeOk === true  ? 'bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]' :
+                          sizeOk === false ? 'bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5]' :
+                          'bg-[#F3F4F6] text-[#6B7280] border-[#E5E7EB]'
+                        }`}>
+                          {sizeOk === true ? '✓ Compliant' : sizeOk === false ? '✗ Below minimum' : '? Unverified'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── Legal disclaimer ────────────────────────────────────── */}
+                  <div className="bg-[#F9FAFB] border border-[#E5E7EB] rounded-2xl px-6 py-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#9CA3AF] mb-2">Important Disclaimer</p>
+                    <p className="text-[10px] text-[#9CA3AF] leading-relaxed">
+                      HMO register data sourced from the national register via PropertyData API and may not reflect recent licensing changes.
+                      Income estimates are indicative only based on regional averages. Always obtain independent legal and financial advice before converting
+                      or purchasing a property as an HMO. Portfolai accepts no liability for decisions made based on this analysis.
+                      Compliance with all local authority requirements including planning, building regulations, and licensing conditions remains the sole
+                      responsibility of the property owner.
+                    </p>
+                  </div>
+
+                </div>
+              )
+            })()}
 
             {/* ═══════════════════════════════════════════════════════════════ */}
             {/* AGENT CONTACT TAB                                               */}
