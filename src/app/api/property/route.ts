@@ -85,9 +85,8 @@ async function fetchHmoData(
   console.log(`Planning applications for ${postcode}: status=${planningResponse?.status} count=${Array.isArray(planningResponse?.data) ? planningResponse.data.length : 0}`)
 
   console.log(`HMO register response: status=${hmoResponse?.status} dataIsArray=${Array.isArray(hmoResponse?.data)} keys=${JSON.stringify(Object.keys(hmoResponse || {}))}`)
-  if (!hmoResponse || hmoResponse.status !== 'success' || !Array.isArray(hmoResponse.data)) return null
-
-  const records: HmoRecord[] = hmoResponse.data as HmoRecord[]
+  if (!hmoResponse || hmoResponse.status !== 'success') return null
+  const records: HmoRecord[] = Array.isArray(hmoResponse.data) ? hmoResponse.data as HmoRecord[] : []
 
   // 1. Is THIS property licensed?
   const thisRecord = records.find(r => matchHmoAddress(r.address ?? '', address))
