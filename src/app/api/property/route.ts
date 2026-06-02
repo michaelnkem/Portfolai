@@ -1342,11 +1342,12 @@ async function calcValuation(
       const res = await fetch(trendsUrl, { headers: { Authorization: `Api-Key ${apiKey}` }, cache: 'no-store' })
       if (res.ok) {
         const td = await res.json()
-        const monthlyPrices: Record<string, unknown>[] = (
+        const raw = (
           td?.monthly_average_prices ||
           td?.data?.monthly_average_prices ||
-          td?.results?.monthly_average_prices || []
+          td?.results?.monthly_average_prices
         )
+        const monthlyPrices: Record<string, unknown>[] = Array.isArray(raw) ? raw : []
         const prices = monthlyPrices.slice(-12)
           .map(m => Number(m.average_price ?? m.avg_price ?? m.price ?? m.value ?? 0))
           .filter(p => p > 50000)
