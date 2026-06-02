@@ -98,6 +98,7 @@ async function fetchHmoData(
 
   // Filter raw listings by bedroom count for accuracy, fall back to district average
   const rawListings = rentsResponse?.data?.long_let?.raw_data ?? []
+  console.log(`Rents filter: bedrooms=${bedrooms} type=${typeof bedrooms} rawCount=${rawListings.length} bedroomMatch=${rawListings.filter(l => l.bedrooms === bedrooms).length}`)
   const bedroomListings = rawListings.filter(l => l.bedrooms === bedrooms && typeof l.price === 'number')
   const fallbackListings = rawListings.filter(l => typeof l.price === 'number')
   const relevantListings = bedroomListings.length >= 3 ? bedroomListings : fallbackListings
