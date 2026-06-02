@@ -414,7 +414,7 @@ export async function GET(req: NextRequest) {
         ? await fetchHmoData(
             postcode,
             String(propRecord.full_address || propRecord.address || ''),
-            Number(propRecord.bedrooms || 2),
+            Number(attrs.bedrooms ?? propRecord.bedrooms ?? 2),
             epcFloorArea !== null ? epcFloorArea : null,
             epcRating,
             process.env.PROPERTYDATA_API_KEY
