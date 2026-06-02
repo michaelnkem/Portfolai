@@ -81,6 +81,7 @@ async function fetchHmoData(
   ])
 
   // Process HMO register response
+  console.log(`HMO register raw: fulfilled=${hmoRes.status === 'fulfilled'} httpStatus=${hmoRes.status === 'fulfilled' ? hmoRes.value.status : 'n/a'} ok=${hmoRes.status === 'fulfilled' ? hmoRes.value.ok : 'n/a'}`)
   const hmoResponse = hmoRes.status === 'fulfilled' && hmoRes.value.ok
     ? await hmoRes.value.json() as { status?: string; data?: Array<Record<string, unknown>> | HmoRecord[] }
     : null
