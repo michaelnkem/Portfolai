@@ -34,6 +34,8 @@ interface HmoResult {
   planningRefusals:    number
   planningApprovals:   number
   rawRecords:          HmoRecord[]
+  sharedRoomRent:      number | null
+  ensuiteRoomRent:     number | null
 }
 
 function matchHmoAddress(candidateAddress: string, targetAddress: string): boolean {
@@ -61,13 +63,17 @@ async function fetchHmoData(
   apiKey:    string,
 ): Promise<HmoResult | null> {
   console.log(`HMO fetch: postcode=${postcode} key=${apiKey?.slice(0,6)}`)
-  const [hmoRes, planningRes] = await Promise.allSettled([
+  const [hmoRes, planningRes, rentsRes] = await Promise.allSettled([
     fetch(
       `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
       { cache: 'no-store' }
     ),
     fetch(
       `https://api.propertydata.co.uk/planning-applications?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
+      { cache: 'no-store' }
+    ),
+    fetch(
+      `https://api.propertydata.co.uk/rents?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
       { cache: 'no-store' }
     ),
   ])
@@ -83,6 +89,15 @@ async function fetchHmoData(
     : null
 
   console.log(`Planning applications for ${postcode}: status=${planningResponse?.status} count=${Array.isArray(planningResponse?.data) ? planningResponse.data.length : 0}`)
+
+  // Parse rents response
+  const rentsResponse = rentsRes.status === 'fulfilled' && rentsRes.value.ok
+    ? await rentsRes.value.json() as { status?: string; data?: { long_let?: { average?: number } } }
+    : null
+  const weeklyRent = rentsResponse?.status === 'success' ? rentsResponse?.data?.long_let?.average ?? null : null
+  const monthlyWhole = weeklyRent ? weeklyRent * 52 / 12 : null
+  const sharedRoomRent  = monthlyWhole ? Math.round(monthlyWhole * 0.38) : null
+  const ensuiteRoomRent = monthlyWhole ? Math.round(monthlyWhole * 0.48) : null
 
   console.log(`HMO register response: status=${hmoResponse?.status} dataIsArray=${Array.isArray(hmoResponse?.data)} keys=${JSON.stringify(Object.keys(hmoResponse || {}))}`)
   if (!hmoResponse || hmoResponse.status !== 'success') return null
@@ -215,6 +230,8 @@ async function fetchHmoData(
     planningRefusals,
     planningApprovals,
     rawRecords:          records.slice(0, 10),
+    sharedRoomRent,
+    ensuiteRoomRent,
   }
 }
 
@@ -442,6 +459,8 @@ export async function GET(req: NextRequest) {
           hmoArticleFourSignal:  hmoResult?.articleFourSignal    ?? 'not_checked',
           hmoPlanningRefusals:   hmoResult?.planningRefusals     ?? 0,
           hmoPlanningApprovals:  hmoResult?.planningApprovals    ?? 0,
+          hmoSharedRoomRent:     hmoResult?.sharedRoomRent       ?? null,
+          hmoEnsuiteRoomRent:    hmoResult?.ensuiteRoomRent      ?? null,
         },
       })
     } catch (e) {

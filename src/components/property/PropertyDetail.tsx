@@ -1601,10 +1601,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'hmo' && (() => {
               const hmo = enriched?.hmo as Record<string, unknown> | null | undefined
-              const hmoVerdict   = (enriched?.hmoVerdict  as string  | null) ?? null
-              const hmoScore     = (enriched?.hmoScore    as number  | null) ?? null
-              const hmoLicensed  = (enriched?.hmoLicensed as boolean)        ?? false
-              const hmoNearby    = (enriched?.hmoNearbyCount as number)      ?? 0
+              const hmoVerdict       = (enriched?.hmoVerdict       as string  | null) ?? null
+              const hmoScore         = (enriched?.hmoScore         as number  | null) ?? null
+              const hmoLicensed      = (enriched?.hmoLicensed      as boolean)        ?? false
+              const hmoNearby        = (enriched?.hmoNearbyCount   as number)         ?? 0
+              const hmoSharedRoomRent  = (enriched?.hmoSharedRoomRent  as number | null) ?? null
+              const hmoEnsuiteRoomRent = (enriched?.hmoEnsuiteRoomRent as number | null) ?? null
               const epcCompliant = (hmo?.epcCompliant as boolean | null)     ?? null
               const sizeOk       = (hmo?.sizeCompliant as boolean | null)    ?? null
 
@@ -1618,10 +1620,10 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 : tenureRaw.includes('leasehold') ? 'Leasehold'
                 : 'Unknown'
 
+              const beds = Math.max(propertyBeds, 3)
               const cityRents = cityName && HMO_ROOM_RENTS[cityName] ? HMO_ROOM_RENTS[cityName] : HMO_ROOM_RENTS['Manchester']
-              const beds      = Math.max(propertyBeds, 3)
-              const hmoSharedIncome  = cityRents.single  * beds
-              const hmoEnsuiteIncome = cityRents.ensuite * beds
+              const hmoSharedIncome  = hmoSharedRoomRent  ? hmoSharedRoomRent  * beds : cityRents.single  * beds
+              const hmoEnsuiteIncome = hmoEnsuiteRoomRent ? hmoEnsuiteRoomRent * beds : cityRents.ensuite * beds
               const singleLetRent    = enriched?.estimatedRent ? Number(enriched.estimatedRent) : effectiveRent ?? 0
 
               const scoreBadgeClass = hmoScore === null ? 'bg-[#F3F4F6] text-[#6B7280]'
@@ -1725,7 +1727,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   )}
 
                   {/* ── Income comparison ───────────────────────────────────── */}
-                  {(hmoVerdict === 'licensed' || hmoVerdict === 'strong_potential' || hmoVerdict === 'possible') && (
+                  {(hmoVerdict === 'licensed' || hmoVerdict === 'strong_potential' || hmoVerdict === 'possible' || hmoVerdict === 'insufficient_data') && (
                     <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] overflow-hidden">
                       <div className="px-6 py-4 border-b border-[#F3F4F6]">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">Monthly Income Comparison</p>
@@ -1753,7 +1755,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                       </div>
                       <div className="px-6 py-3 bg-[#F9FAFB] border-t border-[#F3F4F6]">
                         <p className="text-[10px] text-[#9CA3AF]">
-                          Room rents based on {cityName ?? 'regional'} averages · {beds} rooms assumed · Actual income depends on specification and occupancy
+                          {hmoSharedRoomRent ? `Room rents derived from live local rental data · ` : `Room rents based on ${cityName ?? 'regional'} averages · `}{beds} rooms assumed · Actual income depends on specification and occupancy
                         </p>
                       </div>
                     </div>
