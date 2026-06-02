@@ -36,6 +36,7 @@ interface HmoResult {
   rawRecords:          HmoRecord[]
   sharedRoomRent:      number | null
   ensuiteRoomRent:     number | null
+  singleLetMonthly:    number | null
 }
 
 function matchHmoAddress(candidateAddress: string, targetAddress: string): boolean {
@@ -96,8 +97,9 @@ async function fetchHmoData(
     : null
   const weeklyRent = rentsResponse?.status === 'success' ? rentsResponse?.data?.long_let?.average ?? null : null
   const monthlyWhole = weeklyRent ? weeklyRent * 52 / 12 : null
-  const sharedRoomRent  = monthlyWhole ? Math.round(monthlyWhole * 0.38) : null
-  const ensuiteRoomRent = monthlyWhole ? Math.round(monthlyWhole * 0.48) : null
+  const sharedRoomRent   = monthlyWhole ? Math.round(monthlyWhole * 0.38) : null
+  const ensuiteRoomRent  = monthlyWhole ? Math.round(monthlyWhole * 0.48) : null
+  const singleLetMonthly = monthlyWhole ? Math.round(monthlyWhole) : null
 
   console.log(`HMO register response: status=${hmoResponse?.status} dataIsArray=${Array.isArray(hmoResponse?.data)} keys=${JSON.stringify(Object.keys(hmoResponse || {}))}`)
   if (!hmoResponse || hmoResponse.status !== 'success') return null
@@ -232,6 +234,7 @@ async function fetchHmoData(
     rawRecords:          records.slice(0, 10),
     sharedRoomRent,
     ensuiteRoomRent,
+    singleLetMonthly,
   }
 }
 
@@ -461,6 +464,7 @@ export async function GET(req: NextRequest) {
           hmoPlanningApprovals:  hmoResult?.planningApprovals    ?? 0,
           hmoSharedRoomRent:     hmoResult?.sharedRoomRent       ?? null,
           hmoEnsuiteRoomRent:    hmoResult?.ensuiteRoomRent      ?? null,
+          hmoSingleLetMonthly:   hmoResult?.singleLetMonthly     ?? null,
         },
       })
     } catch (e) {
