@@ -93,9 +93,17 @@ async function fetchHmoData(
 
   // Parse rents response
   const rentsResponse = rentsRes.status === 'fulfilled' && rentsRes.value.ok
-    ? await rentsRes.value.json() as { status?: string; data?: { long_let?: { average?: number } } }
+    ? await rentsRes.value.json() as { status?: string; data?: { long_let?: { average?: number; raw_data?: Array<{ bedrooms?: number | null; price?: number }> } } }
     : null
-  const weeklyRent = rentsResponse?.status === 'success' ? rentsResponse?.data?.long_let?.average ?? null : null
+
+  // Filter raw listings by bedroom count for accuracy, fall back to district average
+  const rawListings = rentsResponse?.data?.long_let?.raw_data ?? []
+  const bedroomListings = rawListings.filter(l => l.bedrooms === bedrooms && typeof l.price === 'number')
+  const fallbackListings = rawListings.filter(l => typeof l.price === 'number')
+  const relevantListings = bedroomListings.length >= 3 ? bedroomListings : fallbackListings
+  const weeklyRent = relevantListings.length > 0
+    ? relevantListings.reduce((sum, l) => sum + (l.price ?? 0), 0) / relevantListings.length
+    : (rentsResponse?.status === 'success' ? rentsResponse?.data?.long_let?.average ?? null : null)
   const monthlyWhole = weeklyRent ? weeklyRent * 52 / 12 : null
   const sharedRoomRent   = monthlyWhole ? Math.round(monthlyWhole * 0.38) : null
   const ensuiteRoomRent  = monthlyWhole ? Math.round(monthlyWhole * 0.48) : null
