@@ -1625,7 +1625,14 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               const cityRents = cityName && HMO_ROOM_RENTS[cityName] ? HMO_ROOM_RENTS[cityName] : HMO_ROOM_RENTS['Manchester']
               const hmoSharedIncome  = hmoSharedRoomRent  ? hmoSharedRoomRent  * beds : cityRents.single  * beds
               const hmoEnsuiteIncome = hmoEnsuiteRoomRent ? hmoEnsuiteRoomRent * beds : cityRents.ensuite * beds
-              const singleLetRent    = hmoSingleLetMonthly ?? (enriched?.estimatedRent ? Number(enriched.estimatedRent) : effectiveRent ?? 0)
+              // Scale single let rent by bedroom count if we have live data
+              const baseSingleLet = hmoSingleLetMonthly ?? (enriched?.estimatedRent ? Number(enriched.estimatedRent) : effectiveRent ?? 0)
+              const liveBedMultiplier: Record<number, number> = { 1: 0.75, 2: 1.00, 3: 1.20, 4: 1.45, 5: 1.75 }
+              const baseBeds = Number(enriched?.attrBedrooms ?? 3)
+              const bedAdjustment = hmoSingleLetMonthly && propertyBeds !== baseBeds
+                ? (liveBedMultiplier[propertyBeds] ?? 1.00) / (liveBedMultiplier[baseBeds] ?? 1.00)
+                : 1
+              const singleLetRent = Math.round(baseSingleLet * bedAdjustment)
 
               const scoreBadgeClass = hmoScore === null ? 'bg-[#F3F4F6] text-[#6B7280]'
                 : hmoScore >= 65 ? 'bg-[#ECFDF5] text-[#047857]'
