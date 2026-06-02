@@ -5,6 +5,219 @@ import {
 import type { ComparableSale } from '@/lib/homedata'
 import { MARKET_DATA, calcGrossYield, calcNetYield, calcNetMonthlyIncome } from '@/lib/market-data'
 
+// ── HMO Intelligence — Phase 1 ───────────────────────────────────────────────
+interface HmoRecord {
+  uprn?:            string
+  address?:         string
+  postcode?:        string
+  licence_number?:  string
+  licence_type?:    string
+  bedrooms?:        number
+  occupants?:       number
+  licence_start?:   string
+  licence_end?:     string
+  distance_miles?:  number
+}
+
+interface HmoResult {
+  isLicensed:          boolean
+  licenceNumber:       string | null
+  licenceType:         string | null
+  licenceExpiry:       string | null
+  nearbyWithin05Miles: number
+  epcCompliant:        boolean | null
+  sizeCompliant:       boolean | null
+  mandatoryLicensing:  boolean
+  verdict:             'licensed' | 'strong_potential' | 'possible' | 'restricted' | 'insufficient_data'
+  hmoScore:            number
+  articleFourSignal:   'likely_restricted' | 'likely_permitted' | 'unknown' | 'not_checked'
+  planningRefusals:    number
+  planningApprovals:   number
+  rawRecords:          HmoRecord[]
+}
+
+function matchHmoAddress(candidateAddress: string, targetAddress: string): boolean {
+  if (!candidateAddress || !targetAddress) return false
+  const normalise = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+  const a = normalise(candidateAddress)
+  const b = normalise(targetAddress)
+  if (a === b) return true
+  // Match on house number + first word of street
+  const numMatch = a.match(/^(\d+[a-z]?)/)
+  if (!numMatch) return false
+  const num = numMatch[1]
+  const streetWordA = a.split(' ')[1] ?? ''
+  const streetWordB = b.split(' ')[1] ?? ''
+  return b.startsWith(num) && streetWordA === streetWordB
+}
+
+async function fetchHmoData(
+  postcode:  string,
+  address:   string,
+  bedrooms:  number,
+  floorArea: number | null,
+  epcRating: string,
+  apiKey:    string,
+): Promise<HmoResult | null> {
+  console.log(`HMO fetch: postcode=${postcode} key=${apiKey?.slice(0,6)}`)
+  const [hmoRes, planningRes] = await Promise.allSettled([
+    fetch(
+      `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
+      { cache: 'no-store' }
+    ),
+    fetch(
+      `https://api.propertydata.co.uk/planning-applications?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
+      { cache: 'no-store' }
+    ),
+  ])
+
+  // Process HMO register response
+  const hmoResponse = hmoRes.status === 'fulfilled' && hmoRes.value.ok
+    ? await hmoRes.value.json() as { status?: string; data?: Array<Record<string, unknown>> | HmoRecord[] }
+    : null
+
+  // Process planning applications response
+  const planningResponse = planningRes.status === 'fulfilled' && planningRes.value.ok
+    ? await planningRes.value.json() as { status?: string; data?: Array<Record<string, unknown>> }
+    : null
+
+  console.log(`Planning applications for ${postcode}: status=${planningResponse?.status} count=${Array.isArray(planningResponse?.data) ? planningResponse.data.length : 0}`)
+
+  console.log(`HMO register response: status=${hmoResponse?.status} dataIsArray=${Array.isArray(hmoResponse?.data)} keys=${JSON.stringify(Object.keys(hmoResponse || {}))}`)
+  if (!hmoResponse || hmoResponse.status !== 'success') return null
+  const records: HmoRecord[] = Array.isArray(hmoResponse.data) ? hmoResponse.data as HmoRecord[] : []
+
+  // 1. Is THIS property licensed?
+  const thisRecord = records.find(r => matchHmoAddress(r.address ?? '', address))
+  const isLicensed = !!thisRecord
+
+  // 2. Nearby count (within 0.5 miles — API returns distance_miles if available)
+  const nearbyWithin05Miles = records.filter(r =>
+    !matchHmoAddress(r.address ?? '', address) &&
+    (r.distance_miles == null || r.distance_miles <= 0.5)
+  ).length
+
+  // 3. EPC compliance — F/G are ineligible
+  const epcUpper = epcRating?.toUpperCase()
+  const epcCompliant = epcUpper && epcUpper !== 'UNKNOWN'
+    ? !['F', 'G'].includes(epcUpper)
+    : null
+
+  // 4. Size compliance — total floor area ÷ bedrooms ≥ 6.51m²
+  const sizeCompliant = floorArea && bedrooms > 0
+    ? (floorArea / bedrooms) >= 6.51
+    : null
+
+  // 5. Mandatory licensing threshold
+  const mandatoryLicensing = bedrooms >= 5
+
+  // Article 4 Direction — scan planning applications for HMO signals
+  let articleFourSignal: HmoResult['articleFourSignal'] = 'unknown'
+  let planningRefusals = 0
+  let planningApprovals = 0
+
+  if (planningResponse?.status === 'success' && Array.isArray(planningResponse?.data)) {
+    const applications = planningResponse.data
+    const threeYearsAgo = new Date()
+    threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
+
+    const hmoKeywords = [
+      'hmo', 'house in multiple occupation', 'article 4',
+      'c3 to c4', 'change of use', 'sui generis',
+      'permitted development', 'multiple occupancy'
+    ]
+    const restrictionKeywords = [
+      'article 4', 'refused', 'refusal', 'not permitted',
+      'planning permission required', 'permitted development removed'
+    ]
+    const approvalKeywords = [
+      'approved', 'granted', 'permitted', 'allowed'
+    ]
+
+    for (const app of applications) {
+      const description = String(app.description || app.proposal || '').toLowerCase()
+      const decision    = String(app.decision || app.status || '').toLowerCase()
+      const dateStr     = String(app.decision_date || app.date || '')
+      const appDate     = dateStr ? new Date(dateStr) : null
+
+      // Only consider applications from last 3 years
+      if (appDate && appDate < threeYearsAgo) continue
+
+      // Check if this application is HMO-related
+      const isHmoRelated = hmoKeywords.some(kw => description.includes(kw))
+      if (!isHmoRelated) continue
+
+      const isRefusal  = restrictionKeywords.some(kw => decision.includes(kw) || description.includes(kw))
+      const isApproval = approvalKeywords.some(kw => decision.includes(kw))
+
+      if (isRefusal) planningRefusals++
+      else if (isApproval) planningApprovals++
+    }
+
+    if (planningRefusals >= 2) {
+      articleFourSignal = 'likely_restricted'
+    } else if (planningApprovals >= 2 && planningRefusals === 0) {
+      articleFourSignal = 'likely_permitted'
+    } else {
+      articleFourSignal = 'unknown'
+    }
+
+    console.log(`Article 4 signal for ${postcode}: ${articleFourSignal} (${planningRefusals} refusals, ${planningApprovals} approvals)`)
+  } else {
+    // No planning data available — mark as not checked only when API key was used but no data returned
+    articleFourSignal = planningResponse === null ? 'not_checked' : 'unknown'
+    console.log(`Article 4 signal: ${articleFourSignal} (${planningRefusals} refusals, ${planningApprovals} approvals)`)
+  }
+
+  // 6. HMO Score (0–100)
+  let score = 0
+  if (isLicensed)                     score += 40
+  if (nearbyWithin05Miles >= 5)        score += 20
+  else if (nearbyWithin05Miles >= 2)   score += 10
+  if (epcCompliant === true)           score += 15
+  if (bedrooms >= 4)                   score += 15
+  else if (bedrooms >= 3)              score += 8
+  if (sizeCompliant === true)          score += 10
+  // Article 4 adjustment
+  if (articleFourSignal === 'likely_restricted') score -= 20
+  else if (articleFourSignal === 'likely_permitted') score += 10
+  const hmoScore = Math.min(100, Math.max(0, score))
+
+  // 7. Verdict
+  let verdict: HmoResult['verdict']
+  if (articleFourSignal === 'likely_restricted' && !isLicensed) {
+    verdict = 'restricted'
+  } else if (isLicensed) {
+    verdict = 'licensed'
+  } else if (epcCompliant === false) {
+    verdict = 'restricted'
+  } else if (hmoScore >= 60 && bedrooms >= 3) {
+    verdict = 'strong_potential'
+  } else if (hmoScore >= 30 || nearbyWithin05Miles > 0) {
+    verdict = 'possible'
+  } else {
+    verdict = 'insufficient_data'
+  }
+
+  return {
+    isLicensed,
+    licenceNumber:       thisRecord?.licence_number ?? null,
+    licenceType:         thisRecord?.licence_type   ?? null,
+    licenceExpiry:       thisRecord?.licence_end    ?? null,
+    nearbyWithin05Miles,
+    epcCompliant,
+    sizeCompliant,
+    mandatoryLicensing,
+    verdict,
+    hmoScore,
+    articleFourSignal,
+    planningRefusals,
+    planningApprovals,
+    rawRecords:          records.slice(0, 10),
+  }
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const q = searchParams.get('q')
@@ -27,12 +240,18 @@ export async function GET(req: NextRequest) {
 
   if (uprn) {
     try {
-      const [property, epc, transactions, risks] = await Promise.all([
+      const [property, transactions, risks] = await Promise.all([
         getProperty(uprn),
-        getEpc(uprn).catch(() => null),
         getTransactions(uprn).catch(() => []),
         getRisks(uprn).catch(() => []),
       ])
+
+      const propRecordEarly = property as Record<string, unknown> | null
+      const epc = await getEpc(
+        uprn,
+        String(propRecordEarly?.full_address || propRecordEarly?.address || ''),
+        String(propRecordEarly?.postcode || '')
+      ).catch(() => null)
 
       const prop = property || { uprn, full_address: `UPRN ${uprn}`, address: `UPRN ${uprn}` }
       const cityName = detectCity(
@@ -149,12 +368,6 @@ export async function GET(req: NextRequest) {
 
       const floodRisk  = (risks || []).find((r: Record<string,unknown>) => r.risk_type === 'flood_rivers_sea')
 
-      // ── HMO DATA (concurrent, non-blocking) ──────────────────────────────────
-      const pdApiKey = process.env.PROPERTYDATA_API_KEY
-      const hmoResult: HmoResult | null = pdApiKey
-        ? await fetchHmoData(postcode, pdApiKey).catch(() => null)
-        : null
-
       // EPC rating: efficiency score → letter; or direct letter from EPC Open Data; or property record
       // epcOpenSub takes priority for the letter rating as it comes directly from the register
       const epcScore = Number(resolvedEpcR?.current_energy_efficiency ?? 0)
@@ -165,6 +378,19 @@ export async function GET(req: NextRequest) {
           : epcOpenSub?.current_energy_rating
             ? String(epcOpenSub.current_energy_rating)
             : String(propRecord.current_energy_rating || 'Unknown')
+
+      // HMO Intelligence — Phase 1
+      // Wrapped in catch so it NEVER blocks the page load
+      const hmoResult = process.env.PROPERTYDATA_API_KEY
+        ? await fetchHmoData(
+            postcode,
+            String(propRecord.full_address || propRecord.address || ''),
+            Number(propRecord.bedrooms || 2),
+            epcFloorArea !== null ? epcFloorArea : null,
+            epcRating,
+            process.env.PROPERTYDATA_API_KEY
+          ).catch(() => null)
+        : null
 
       return NextResponse.json({
         uprn,
@@ -207,13 +433,15 @@ export async function GET(req: NextRequest) {
           attrTenureInferred:     attrs.tenureInferred,
           attrGardenLabel:        attrs.gardenLabel,
           attrGardenInferred:     attrs.gardenInferred,
-          // HMO data
-          hmoVerdict:             hmoResult?.verdict        ?? null,
-          hmoRegisteredCount:     hmoResult?.registeredCount ?? null,
-          hmoPlanningCount:       hmoResult?.planningCount   ?? null,
-          hmoAreaScore:           hmoResult?.areaHmoScore    ?? null,
-          hmoSharedRoomRent:      hmoResult?.sharedRoomRent  ?? null,
-          hmoEnsuiteRoomRent:     hmoResult?.ensuiteRoomRent ?? null,
+          // HMO Intelligence — Phase 1
+          hmo:                   hmoResult,
+          hmoVerdict:            hmoResult?.verdict              ?? null,
+          hmoScore:              hmoResult?.hmoScore             ?? null,
+          hmoLicensed:           hmoResult?.isLicensed           ?? false,
+          hmoNearbyCount:        hmoResult?.nearbyWithin05Miles  ?? 0,
+          hmoArticleFourSignal:  hmoResult?.articleFourSignal    ?? 'not_checked',
+          hmoPlanningRefusals:   hmoResult?.planningRefusals     ?? 0,
+          hmoPlanningApprovals:  hmoResult?.planningApprovals    ?? 0,
         },
       })
     } catch (e) {
@@ -354,91 +582,6 @@ function efficiencyToRating(score: number): string {
   if (score >= 39) return 'E'
   if (score >= 21) return 'F'
   return 'G'
-}
-
-// ── HMO DATA ENGINE ───────────────────────────────────────────────────────────
-
-interface HmoResult {
-  registeredCount:  number | null
-  planningCount:    number | null
-  sharedRoomRent:   number | null
-  ensuiteRoomRent:  number | null
-  verdict: 'licensed' | 'strong_potential' | 'possible' | 'insufficient_data'
-  areaHmoScore:     number | null
-}
-
-async function fetchHmoData(postcode: string, apiKey: string): Promise<HmoResult> {
-  const outcode = postcode.split(' ')[0].toUpperCase()
-
-  const [hmoRes, planningRes, rentsRes] = await Promise.allSettled([
-    fetch(`https://api.propertydata.co.uk/hmo-register?key=${apiKey}&postcode=${encodeURIComponent(outcode)}`, { cache: 'no-store' }),
-    fetch(`https://api.propertydata.co.uk/planning?key=${apiKey}&postcode=${encodeURIComponent(outcode)}`, { cache: 'no-store' }),
-    fetch(`https://api.propertydata.co.uk/rents?key=${apiKey}&postcode=${encodeURIComponent(outcode)}`, { cache: 'no-store' }),
-  ])
-
-  // Parse HMO register
-  let registeredCount: number | null = null
-  if (hmoRes.status === 'fulfilled' && hmoRes.value.ok) {
-    try {
-      const d = await hmoRes.value.json() as Record<string, unknown>
-      if (d.status === 'success') {
-        if (Array.isArray(d.data)) registeredCount = (d.data as unknown[]).length
-        else if (typeof (d.data as Record<string, unknown>)?.count === 'number') registeredCount = (d.data as Record<string, unknown>).count as number
-        else registeredCount = 0
-      }
-    } catch { /* ignore */ }
-  }
-
-  // Parse planning
-  let planningCount: number | null = null
-  if (planningRes.status === 'fulfilled' && planningRes.value.ok) {
-    try {
-      const d = await planningRes.value.json() as Record<string, unknown>
-      if (d.status === 'success') {
-        const pd = d.data as Record<string, unknown>
-        planningCount = Number(pd?.count ?? pd?.total ?? pd?.results_count ?? 0) || 0
-      }
-    } catch { /* ignore */ }
-  }
-
-  // Parse rents → derive room rates
-  let sharedRoomRent:  number | null = null
-  let ensuiteRoomRent: number | null = null
-  if (rentsRes.status === 'fulfilled' && rentsRes.value.ok) {
-    try {
-      const d = await rentsRes.value.json() as Record<string, unknown>
-      if (d.status === 'success') {
-        const longLet    = (d.data as Record<string, unknown>)?.long_let as Record<string, unknown>
-        const weeklyRent = Number(longLet?.average ?? 0)
-        if (weeklyRent > 0) {
-          const monthlyWhole = weeklyRent * 52 / 12
-          sharedRoomRent  = Math.round(monthlyWhole * 0.38)
-          ensuiteRoomRent = Math.round(monthlyWhole * 0.48)
-        }
-      }
-    } catch { /* ignore */ }
-  }
-
-  // Verdict
-  let verdict: HmoResult['verdict']
-  if (registeredCount != null && registeredCount >= 5) {
-    verdict = 'licensed'
-  } else if (registeredCount != null && registeredCount >= 1) {
-    verdict = 'strong_potential'
-  } else if (registeredCount === 0 || planningCount != null || sharedRoomRent != null) {
-    verdict = 'possible'
-  } else {
-    verdict = 'insufficient_data'
-  }
-
-  return {
-    registeredCount,
-    planningCount,
-    sharedRoomRent,
-    ensuiteRoomRent,
-    verdict,
-    areaHmoScore: registeredCount != null ? Math.min(100, registeredCount * 8 + 20) : null,
-  }
 }
 
 // ── ATTRIBUTE RECOVERY ENGINE v1.0 ───────────────────────────────────────────
@@ -1199,11 +1342,12 @@ async function calcValuation(
       const res = await fetch(trendsUrl, { headers: { Authorization: `Api-Key ${apiKey}` }, cache: 'no-store' })
       if (res.ok) {
         const td = await res.json()
-        const monthlyPrices: Record<string, unknown>[] = (
+        const raw = (
           td?.monthly_average_prices ||
           td?.data?.monthly_average_prices ||
-          td?.results?.monthly_average_prices || []
+          td?.results?.monthly_average_prices
         )
+        const monthlyPrices: Record<string, unknown>[] = Array.isArray(raw) ? raw : []
         const prices = monthlyPrices.slice(-12)
           .map(m => Number(m.average_price ?? m.avg_price ?? m.price ?? m.value ?? 0))
           .filter(p => p > 50000)
@@ -1528,3 +1672,4 @@ async function fetchLrData(
     return empty
   }
 }
+// redeploy Tue  2 Jun 2026 07:18:05 BST
