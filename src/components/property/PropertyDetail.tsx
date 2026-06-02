@@ -1605,8 +1605,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               const hmoScore         = (enriched?.hmoScore         as number  | null) ?? null
               const hmoLicensed      = (enriched?.hmoLicensed      as boolean)        ?? false
               const hmoNearby        = (enriched?.hmoNearbyCount   as number)         ?? 0
-              const hmoSharedRoomRent  = (enriched?.hmoSharedRoomRent  as number | null) ?? null
-              const hmoEnsuiteRoomRent = (enriched?.hmoEnsuiteRoomRent as number | null) ?? null
+              const hmoSharedRoomRent   = (enriched?.hmoSharedRoomRent   as number | null) ?? null
+              const hmoEnsuiteRoomRent  = (enriched?.hmoEnsuiteRoomRent  as number | null) ?? null
+              const hmoSingleLetMonthly = (enriched?.hmoSingleLetMonthly as number | null) ?? null
               const epcCompliant = (hmo?.epcCompliant as boolean | null)     ?? null
               const sizeOk       = (hmo?.sizeCompliant as boolean | null)    ?? null
 
@@ -1624,7 +1625,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               const cityRents = cityName && HMO_ROOM_RENTS[cityName] ? HMO_ROOM_RENTS[cityName] : HMO_ROOM_RENTS['Manchester']
               const hmoSharedIncome  = hmoSharedRoomRent  ? hmoSharedRoomRent  * beds : cityRents.single  * beds
               const hmoEnsuiteIncome = hmoEnsuiteRoomRent ? hmoEnsuiteRoomRent * beds : cityRents.ensuite * beds
-              const singleLetRent    = enriched?.estimatedRent ? Number(enriched.estimatedRent) : effectiveRent ?? 0
+              const singleLetRent    = hmoSingleLetMonthly ?? (enriched?.estimatedRent ? Number(enriched.estimatedRent) : effectiveRent ?? 0)
 
               const scoreBadgeClass = hmoScore === null ? 'bg-[#F3F4F6] text-[#6B7280]'
                 : hmoScore >= 65 ? 'bg-[#ECFDF5] text-[#047857]'
