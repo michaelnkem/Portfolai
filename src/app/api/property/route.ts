@@ -415,6 +415,7 @@ export async function GET(req: NextRequest) {
       const hmoOutcode = postcode.trim().split(' ')[0].toUpperCase()
       const hmoResult = process.env.PROPERTYDATA_API_KEY
         ? await fetchHmoData(
+            postcode,
             hmoOutcode,
             String(propRecord.full_address || propRecord.address || ''),
             Number(attrs.bedrooms ?? propRecord.bedrooms ?? 2),
