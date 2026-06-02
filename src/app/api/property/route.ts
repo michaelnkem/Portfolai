@@ -57,6 +57,7 @@ function matchHmoAddress(candidateAddress: string, targetAddress: string): boole
 
 async function fetchHmoData(
   postcode:  string,
+  outcode:   string,
   address:   string,
   bedrooms:  number,
   floorArea: number | null,
@@ -74,7 +75,7 @@ async function fetchHmoData(
       { cache: 'no-store' }
     ),
     fetch(
-      `https://api.propertydata.co.uk/rents?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
+      `https://api.propertydata.co.uk/rents?key=${apiKey}&postcode=${encodeURIComponent(outcode)}`,
       { cache: 'no-store' }
     ),
   ])
