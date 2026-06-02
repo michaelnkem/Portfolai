@@ -60,6 +60,7 @@ async function fetchHmoData(
   epcRating: string,
   apiKey:    string,
 ): Promise<HmoResult | null> {
+  console.log(`HMO fetch: postcode=${postcode} key=${apiKey?.slice(0,6)}`)
   const [hmoRes, planningRes] = await Promise.allSettled([
     fetch(
       `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
