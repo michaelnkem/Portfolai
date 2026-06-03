@@ -400,6 +400,17 @@ async function fetchLiveListings(
       if (!/[a-zA-Z]{3,}/.test(street)) return false
       if (street.length < 4) return false
 
+      // Remove commercial entities — company names in address
+      const fullAddr = String(l.display_address || l.street || '').toUpperCase()
+      const commercialPatterns = [
+        / LTD$/, / LTD,/, / LIMITED$/, / LIMITED,/, / PLC$/, / PLC,/,
+        / LLC$/, / LLC,/, / LLP$/, / LLP,/, /L\.T\.D/,
+        / HOUSE,/, /MANCHESTER HOUSE/, /BUSINESS CENTRE/,
+        /TRADING AS/, /T\/A /, /T\.A\./, /T K A/,
+        /STUDIOS?$/, /STUDIO LTD/, /SPACE STUDIO/,
+      ]
+      if (commercialPatterns.some(p => p.test(fullAddr))) return false
+
       // Remove commercial property types
       const propType = String(l.property_type || '').toLowerCase()
       const isCommercial = [

@@ -312,7 +312,7 @@ function DealCard({
             {deal.displayAddress || deal.address}
           </p>
           <p className="text-xs text-[#6B7280]">
-            {[deal.city, deal.postcode].filter(Boolean).join(' · ')}
+            {[deal.city, deal.postcode].filter(Boolean).map(s => s.replace(/,?\s*unparished area/gi, '').trim()).filter(Boolean).join(' · ')}
           </p>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             {deal.propertyType && (
