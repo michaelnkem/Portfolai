@@ -309,7 +309,7 @@ function DealCard({
           </div>
           <p className="text-[10px] text-[#6B7280] mb-1.5 uppercase tracking-[0.05em] font-semibold">Asking Price</p>
           <p className="text-sm font-semibold text-[#111827] leading-snug mb-0.5" style={{ fontFamily: SERIF }}>
-            {deal.displayAddress || deal.address}
+            {(deal.displayAddress || deal.address || '').replace(/,?\s*unparished area/gi, '').trim()}
           </p>
           <p className="text-xs text-[#6B7280]">
             {[deal.city, deal.postcode].filter(Boolean).map(s => s.replace(/,?\s*unparished area/gi, '').trim()).filter(Boolean).join(' · ')}
