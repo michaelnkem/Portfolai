@@ -922,16 +922,19 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                               </div>
                             ) : (
                               <div className="flex items-center gap-1.5">
-                                <span className={`text-sm font-semibold ${bedroomsOverride !== null ? 'text-[#047857]' : bedsInferred ? 'text-[#B7791F]' : 'text-[#111827]'}`}>
-                                  {bedsLabel}{bedroomsOverride !== null ? ' ✓' : bedsInferred ? ' *' : ''}
-                                </span>
-                                <button
-                                  type="button"
-                                  aria-label="Correct bedroom count"
-                                  onClick={() => setEditingBeds(true)}
-                                  className="text-xs font-semibold px-2 py-0.5 rounded-lg bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857] hover:bg-[#D1FAE5] transition-colors">
-                                  {bedroomsOverride !== null ? 'Edit' : 'Correct?'}
-                                </button>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={10}
+                                  value={bedroomsOverride !== null ? bedroomsOverride : (Number(bedsLabel) || '')}
+                                  onChange={e => {
+                                    const v = parseInt(e.target.value, 10)
+                                    if (v >= 1 && v <= 10) setBedroomsOverride(v)
+                                    else if (e.target.value === '') setBedroomsOverride(null)
+                                  }}
+                                  className="w-14 text-sm font-semibold text-[#111827] border border-[#E7E5DD] rounded-lg px-2 py-0.5 text-center focus:outline-none focus:border-[#047857] bg-white"
+                                  aria-label="Bedroom count"
+                                />
                               </div>
                             )
                           ) : row.epc ? (
@@ -939,8 +942,8 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                               {row.value}
                             </span>
                           ) : (
-                            <span className={`text-sm font-semibold ${row.inferred ? 'text-[#B7791F]' : 'text-[#111827]'}`}>
-                              {row.value}{row.inferred ? ' *' : ''}
+                            <span className="text-sm font-semibold text-[#111827]">
+                              {row.value}
                             </span>
                           )}
                           {row.label !== 'Bedrooms' && row.verified && (
@@ -952,9 +955,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                       </div>
                     ))}
                   </div>
-                  {anyInferred && (
-                    <p className="text-[11px] text-[#9CA3AF] mt-3">* Estimated from floor area and local property norms.</p>
-                  )}
+                  <p className="text-[11px] text-[#9CA3AF] mt-3">Some attributes are estimated from floor area, local property data, and EPC records where direct data is unavailable.</p>
                   <div className="mt-4 pt-4 border-t border-[#F3F4F6]">
                     <p className="text-[11px] text-[#9CA3AF]">Sources: Land Registry · EPC Open Data · Homedata · UK HPI</p>
                   </div>
