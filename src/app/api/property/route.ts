@@ -126,14 +126,14 @@ async function fetchHmoData(
   const singleLetMonthly = monthlyWhole ? Math.round(monthlyWhole) : null
 
   console.log(`HMO register response: status=${hmoResponse?.status} keys=${JSON.stringify(Object.keys(hmoResponse || {}))}`)
-  if (!hmoResponse || hmoResponse.status !== 'success') return null
+  // If API failed or timed out, continue with empty records — demand signal will score instead
 
   // ── Radius fallback: if no records at default radius, retry with expanding radii ──
   // Each level applies a distance weight to the nearby count to penalise lower locality
   // Weight: 1.0 = exact postcode, 0.8 = 0.5mi, 0.6 = 1mi, 0.4 = 1.5mi
   type RadiusResult = { records: HmoRecord[]; distanceWeight: number; radiusUsed: number | null }
 
-  let initialRecords = parseHmoRecords(hmoResponse)
+  let initialRecords = hmoResponse?.status === 'success' ? parseHmoRecords(hmoResponse) : []
   let radiusResult: RadiusResult = { records: initialRecords, distanceWeight: 1.0, radiusUsed: null }
 
   if (initialRecords.length === 0) {
