@@ -359,8 +359,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
   const displayedCashflow = mort ? displayedMonthlyIncome - mort.monthly : displayedMonthlyIncome
 
   // ── Ownership-aware KPI financials ───────────────────────────────────────────
-  // Net Yield and Total ROI reflect the active ownership tax treatment when
-  // ownershipComparison is available (requires rent + mortgage to be set).
   const ownershipFinancials = (() => {
     if (!ownershipComparison) {
       return {
@@ -371,7 +369,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
       }
     }
     if (ownershipType === 'personal') {
-      // Swap net income to personal after-S24-tax monthly (annualised)
       const annualIncome = ownershipComparison.personal.afterTaxMonthly * 12
       const ownerNetYield = yieldPrice > 0 ? parseFloat((annualIncome / yieldPrice * 100).toFixed(2)) : 0
       return {
@@ -381,7 +378,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
         totalROISubLabel: 'Section 24 + cap growth',
       }
     }
-    // company: swap net income to after-extraction monthly (annualised)
     const annualIncome = ownershipComparison.company.afterExtractionMonthly * 12
     const ownerNetYield = yieldPrice > 0 ? parseFloat((annualIncome / yieldPrice * 100).toFixed(2)) : 0
     return {
@@ -424,7 +420,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
   const epcCompliant = epcKnown && epcRating <= 'C'
 
   // ── Attribute resolution ─────────────────────────────────────────────────────
-  // bedsLabel: override first, then enriched label, then raw bedrooms, then fallback (Part B)
   const bedsLabel = (() => {
     if (bedroomsOverride !== null) return String(bedroomsOverride)
     const enrichedLabel = String(enriched?.attrBedroomsLabel ?? '')
@@ -446,7 +441,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
   const address  = String(p?.full_address || p?.address || 'Unknown Address')
   const postcode = String(p?.postcode ?? '')
 
-  // ── Investment Signals (computed once per property — requires postcode) ───────
+  // ── Investment Signals ───────────────────────────────────────────────────────
   const investmentSignals: InvestmentSignals = calculateInvestmentSignals({ postcode, cityName })
 
   // propertyBeds: uses override when active (Part B)
@@ -493,9 +488,8 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
   return (
     <div className={inline ? 'flex flex-col flex-1 overflow-hidden bg-[#FAF9F5]' : 'fixed inset-0 z-50 flex bg-[#FAF9F5] overflow-hidden'} style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
 
-      {/* ── Sidebar (modal mode only — inline mode uses the main app sidebar) ── */}
+      {/* ── Sidebar (modal mode only) ── */}
       {!inline && <aside className="hidden lg:flex flex-col w-[248px] shrink-0 bg-white border-r border-[#E7E5DD] h-full overflow-y-auto">
-        {/* Logo */}
         <div className="px-6 py-5 border-b border-[#E7E5DD]">
           <button onClick={() => onHome ? onHome() : onClose()}
             className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
@@ -508,7 +502,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
           </button>
         </div>
 
-        {/* Nav */}
         <nav className="flex-1 px-4 py-4 space-y-0.5">
           {NAV_ITEMS.map(item => (
             <button key={item.label}
@@ -525,7 +518,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
           ))}
         </nav>
 
-        {/* Bottom cards */}
         <div className="px-4 pb-4 space-y-3">
           <div className="bg-[#FFF7E6] border border-[#F5D48A] rounded-2xl p-4">
             <p className="text-[11px] font-bold text-[#B7791F] mb-1">⭐ Upgrade to Premium</p>
@@ -545,7 +537,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
       {/* ── Main area ───────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
-        {/* Top header (modal mode only — inline mode uses the main app header) */}
         {!inline && <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-[#E7E5DD] px-6 lg:px-8 h-[68px] flex items-center justify-between gap-4 z-10">
           <PropertySearchBar
             onSelectProperty={onSearchProperty ?? (() => {})}
@@ -574,7 +565,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
           </div>
         </header>}
 
-        {/* ── Sticky scroll summary ──────────────────────────────────────────── */}
         <div className={`shrink-0 overflow-hidden transition-all duration-300 ${scrolled ? 'max-h-[56px] border-b border-[#E7E5DD]' : 'max-h-0'}`}>
           <div className="bg-white/95 backdrop-blur-sm px-6 lg:px-8 h-14 flex items-center justify-between gap-6">
             <p className="text-sm font-semibold text-[#111827] truncate" style={{ fontFamily: SERIF }}>{address.split(',')[0]}</p>
@@ -609,11 +599,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
           </div>
         </div>
 
-        {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto" ref={scrollRef}>
           <div className="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-            {/* ── Property header ────────────────────────────────────────────── */}
             <div className="mb-6">
               <button onClick={onClose}
                 className="flex items-center gap-1.5 text-sm text-[#6B7280] hover:text-[#047857] transition-colors mb-4 group">
@@ -630,14 +618,12 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 return (
                   <div className="mb-6 overflow-hidden rounded-2xl border border-[#F5D48A] bg-[#FFFBF0] shadow-[0_2px_8px_rgba(184,120,32,0.06)]"
                     style={{ animation: 'slideDown 0.3s ease' }}>
-                    {/* Notice row */}
                     <div className="flex items-start gap-3 px-5 py-4">
                       <span className="text-[#B7791F] text-sm shrink-0 mt-0.5">⚠</span>
                       <p className="text-[13px] text-[#92400E] leading-relaxed flex-1">
                         {String(activeData._uprn_notice)}
                       </p>
                     </div>
-                    {/* Inline picker — only when 4+ suggestions exist */}
                     {suggestions && suggestions.length >= 4 && (
                       <div className="border-t border-[#F5D48A]/60 px-5 pb-4 pt-3">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[#B7791F] mb-3">
@@ -656,7 +642,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                                   const freshData = await res.json() as Record<string, unknown>
                                   const originalAskingPrice = (activeData._original_asking_price as number)
                                     || ((activeData.enriched as Record<string, unknown>)?.estimatedCurrentValue as number)
-
                                   if (originalAskingPrice && freshData?.enriched) {
                                     (freshData.enriched as Record<string, unknown>).estimatedCurrentValue = originalAskingPrice
                                     ;(freshData.enriched as Record<string, unknown>).valuationMethod = 'listing_asking_price'
@@ -742,14 +727,13 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               </div>
             </div>
 
-            {/* ── KPI strip ──────────────────────────────────────────────────── */}
+            {/* ── KPI strip ── */}
             {isLoading ? (
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
                 {[...Array(5)].map((_, i) => <SkeletonCard key={i} className={i === 0 ? 'col-span-2 lg:col-span-1' : ''} />)}
               </div>
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-4 mb-6">
-                  {/* Est. Current Value / Asking Price */}
                   <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">
                       {isLiveListing ? 'Asking Price' : 'Estimated Current Value'}
@@ -777,7 +761,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     </div>
                   </div>
 
-                  {/* Last Sold */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Last Sold Price</p>
                     <p className="font-bold text-[28px] leading-none text-[#111827] mb-2"
@@ -789,7 +772,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     )}
                   </div>
 
-                  {/* Gross Yield */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Gross Yield</p>
                     <p className={`font-bold text-[28px] leading-none mb-2 ${grossYield > 6 ? 'text-[#047857]' : 'text-[#111827]'}`}
@@ -802,7 +784,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     )}
                   </div>
 
-                  {/* Net Yield */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Net Yield</p>
                     <p className={`font-bold text-[28px] leading-none mb-2 ${ownershipFinancials.netYield > 4 ? 'text-[#047857]' : 'text-[#111827]'}`}
@@ -818,7 +799,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     )}
                   </div>
 
-                  {/* Total ROI */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">Total ROI</p>
                     <p className="font-bold text-[28px] leading-none text-[#B7791F] mb-2"
@@ -830,7 +810,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               </div>
             )}
 
-            {/* ── Confidence + data quality bar ──────────────────────────────── */}
             <div className="flex items-center justify-between gap-4 mb-5 px-1 flex-wrap">
               <div className="flex items-center gap-3 flex-wrap">
                 {comparablesCount > 0 && (
@@ -838,7 +817,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     ✓ High confidence · Based on {comparablesCount} local transaction{comparablesCount !== 1 ? 's' : ''}
                   </span>
                 )}
-<span className="inline-flex items-center text-[11px] text-[#9CA3AF]">
+                <span className="inline-flex items-center text-[11px] text-[#9CA3AF]">
                   {localMarketType}
                 </span>
               </div>
@@ -847,7 +826,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               </p>
             </div>
 
-            {/* ── Global ownership toggle ────────────────────────────────────── */}
             <div className="flex items-center justify-between mb-4 px-1 flex-wrap gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">Ownership Mode</span>
@@ -881,7 +859,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
               </div>
             </div>
 
-            {/* ── Tab bar ────────────────────────────────────────────────────── */}
             <div className="flex gap-0 border-b border-[#E7E5DD] mb-6 overflow-x-auto">
               {tabs.map(t => (
                 <button key={t.id} onClick={() => setTab(t.id)}
@@ -900,8 +877,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'overview' && (
               <div className="grid grid-cols-12 gap-5">
-
-                {/* ── Property Details (col 1–4) ──────────────────────────── */}
                 <div className="col-span-12 lg:col-span-4 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Property Details</h3>
                   <div>
@@ -985,7 +960,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   </div>
                 </div>
 
-                {/* ── Investment Signals (col 5–9) ────────────────────────── */}
                 <div className="col-span-12 lg:col-span-5 bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Investment Signals</h3>
                   <p className="text-[11px] text-[#9CA3AF] mb-4">100-point scale · scores reflect local area conditions</p>
@@ -1032,9 +1006,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   </p>
                 </div>
 
-                {/* ── History Preview (col 10–12) ─────────────────────────── */}
                 <div className="col-span-12 lg:col-span-3">
-                  {/* History Preview */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280]">History Preview</h3>
@@ -1075,10 +1047,9 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                       <p className="text-xs text-[#9CA3AF]">May be newly built or not yet registered with Land Registry.</p>
                     </div>
                   )}
-                  </div>{/* end History Preview card */}
-                </div>{/* end History Preview column */}
+                  </div>
+                </div>
 
-                {/* Data bar */}
                 <div className="col-span-12 bg-[#F6F3EC] border border-[#E7E5DD] rounded-xl px-5 py-3 flex gap-6 flex-wrap text-xs text-[#6B7280]">
                   <span>UPRN: <strong className="text-[#374151]">{String(p?.uprn ?? '')}</strong></span>
                   <span>Postcode: <strong className="text-[#374151]">{postcode}</strong></span>
@@ -1096,7 +1067,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'financials' && (
               <div className="space-y-5">
-                {/* Rent input */}
                 <div className="bg-white border border-[#A7F3D0] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Monthly Rent (£)</h3>
                   <div className="flex gap-3 items-center">
@@ -1119,7 +1089,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  {/* Cost sliders */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual Costs</h3>
                     <div className="space-y-4">
@@ -1143,7 +1112,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     </div>
                   </div>
 
-                  {/* P&L */}
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Annual P&amp;L</h3>
                     {[
@@ -1206,7 +1174,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   </div>
                 </div>
 
-                {/* Mortgage modeller */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-5">Mortgage Cashflow Modeller</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-5">
@@ -1243,7 +1210,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   )}
                 </div>
 
-                {/* Ownership Structure Toggle */}
                 {ownershipComparison && (
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <div className="flex items-center justify-between mb-4">
@@ -1262,7 +1228,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                       </div>
                     </div>
 
-                    {/* Comparison tiles */}
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div className={`rounded-xl p-4 border transition-colors ${ownershipType === 'personal' ? 'border-[#047857] bg-[#ECFDF5]' : 'border-[#E7E5DD] bg-[#FAF9F5]'}`}>
                         <p className="text-[10px] uppercase tracking-[0.08em] text-[#9CA3AF] mb-1">Personal</p>
@@ -1280,7 +1245,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                       </div>
                     </div>
 
-                    {/* Verdict */}
                     <div className={`rounded-xl px-4 py-3 border mb-4 ${
                       ownershipComparison.verdict === 'company' ? 'bg-[#ECFDF5] border-[#A7F3D0]'
                       : ownershipComparison.verdict === 'personal' ? 'bg-[#FFF7E6] border-[#F5D48A]'
@@ -1292,7 +1256,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                       </p>
                     </div>
 
-                    {/* Company settings (only when company mode) */}
                     {ownershipType === 'company' && (
                       <div className="space-y-3 pt-3 border-t border-[#F3F4F6]">
                         <div>
@@ -1348,7 +1311,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   </div>
                 )}
 
-                {/* Section 24 Tax Calculator */}
                 {ownershipType === 'personal' && (
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <div className="flex items-center justify-between mb-1">
@@ -1491,7 +1453,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'risks' && (
               <div className="space-y-5">
-                {/* EPC card */}
                 <div className={`bg-white rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)] border ${
                   epcKnown && !epcCompliant ? 'border-[#FCA5A5]' : epcKnown ? 'border-[#A7F3D0]' : 'border-[#E7E5DD]'
                 }`}>
@@ -1528,7 +1489,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   </div>
                 </div>
 
-                {/* Environmental risks */}
                 {risks && risks.length > 0 && (
                   <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                     <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Environmental Risks — Homedata</h3>
@@ -1551,7 +1511,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   </div>
                 )}
 
-                {/* Investment risk factors */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl p-6 shadow-[0_10px_30px_rgba(17,24,39,0.04)]">
                   <h3 className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Investment Risk Factors</h3>
                   <div className="space-y-3">
@@ -1639,7 +1598,8 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 : hmoScore >= 40 ? 'bg-[#FFF7E6] text-[#B7791F]'
                 : 'bg-[#FEF2F2] text-[#DC2626]'
 
-              const noApiKey = !hmo && !hmoVerdict && !hmoScore
+              // ── KEY FIX: Always show HMO section when data is available ──
+              const noApiKey = false
 
               return (
                 <div className="space-y-5">
@@ -1775,7 +1735,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                       <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">HMO Compliance Checklist</p>
                     </div>
                     <div className="divide-y divide-[#F9FAFB]">
-                      {/* EPC */}
                       <div className="px-6 py-4 flex items-center justify-between gap-4">
                         <div>
                           <p className="text-sm font-semibold text-[#111827]">EPC Rating</p>
@@ -1793,7 +1752,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                             : (epcRating !== '?' ? epcRating : 'Unknown')}
                         </span>
                       </div>
-                      {/* Bedroom count */}
                       <div className="px-6 py-4 flex items-center justify-between gap-4">
                         <div>
                           <p className="text-sm font-semibold text-[#111827]">Bedroom Count</p>
@@ -1809,7 +1767,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                            `✗ ${propertyBeds} beds — too few`}
                         </span>
                       </div>
-                      {/* Tenure */}
                       <div className="px-6 py-4 flex items-center justify-between gap-4">
                         <div>
                           <p className="text-sm font-semibold text-[#111827]">Tenure</p>
@@ -1825,7 +1782,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                           {tenureDisplay}
                         </span>
                       </div>
-                      {/* Article 4 */}
                       <div className="px-6 py-4 flex items-center justify-between gap-4">
                         <div>
                           <p className="text-sm font-semibold text-[#111827]">Article 4 Direction</p>
@@ -1873,7 +1829,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                           )
                         })()}
                       </div>
-                      {/* Room sizes */}
                       <div className="px-6 py-4 flex items-center justify-between gap-4">
                         <div>
                           <p className="text-sm font-semibold text-[#111827]">Room Size Compliance</p>
@@ -1911,8 +1866,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
             {/* ═══════════════════════════════════════════════════════════════ */}
             {tab === 'agent' && (
               <div className="max-w-2xl space-y-5">
-
-                {/* Agent card */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] overflow-hidden">
                   <div className="px-6 py-5 border-b border-[#F3F4F6]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-1">Estate Agent</p>
@@ -1926,7 +1879,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                     )}
                   </div>
 
-                  {/* Contact action buttons */}
                   {liveAgentName && (
                     <div className="px-6 py-5 space-y-3">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-3">Find this agent</p>
@@ -1960,7 +1912,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   )}
                 </div>
 
-                {/* Listing details */}
                 <div className="bg-white border border-[#E7E5DD] rounded-2xl shadow-[0_8px_24px_rgba(17,24,39,0.04)] px-6 py-5">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-4">Listing details</p>
                   <div className="grid grid-cols-2 gap-4">
@@ -1978,13 +1929,11 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                   </div>
                 </div>
 
-                {/* Note */}
                 <div className="bg-[#FAF9F5] border border-[#E7E5DD] rounded-xl px-4 py-3">
                   <p className="text-[12px] text-[#9CA3AF] leading-relaxed">
                     Direct phone numbers and email addresses are not available from this data source. Use the links above to locate the agent branch and request a viewing or ask for the seller&apos;s preferred contact method.
                   </p>
                 </div>
-
               </div>
             )}
 
@@ -1992,7 +1941,6 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
         </div>
       </div>
 
-      {/* Skeleton shimmer styles */}
       <style>{`
         @keyframes shimmer-light {
           0%   { background-position: -200% 0; }
@@ -2073,7 +2021,6 @@ function LightCityMarketPanel({
         </select>
       </div>
 
-      {/* Local market label */}
       {cityName && (
         <p className="text-[11px] text-[#9CA3AF] mb-4">
           {BEDS.find(b => b.key === selectedBed)?.label} market · {selectedCity}
@@ -2081,7 +2028,6 @@ function LightCityMarketPanel({
         </p>
       )}
 
-      {/* Bedroom pills */}
       <div className="flex gap-1.5 mb-4 flex-wrap items-center">
         {BEDS.map(b => (
           <button key={b.key} onClick={() => setSelectedBed(b.key)}
@@ -2103,7 +2049,6 @@ function LightCityMarketPanel({
         </div>
       )}
 
-      {/* Table */}
       <div className="overflow-hidden rounded-xl border border-[#E7E5DD]">
         <div className="grid grid-cols-3 bg-[#FAF9F5] px-4 py-2.5 border-b border-[#E7E5DD]">
           <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF]">Metric</span>
