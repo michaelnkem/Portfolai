@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MARKET_DATA } from '@/lib/market-data'
 
+export const dynamic = 'force-dynamic'
+
 export const runtime = 'edge'
 
 export async function POST(req: NextRequest) {
