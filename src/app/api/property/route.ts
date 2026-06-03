@@ -1,600 +1,303 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
-  searchAddress, getProperty, getEpc, getTransactions, getRisks
+  getProperty, getEpc, getTransactions, getRisks, getHomedataComparables,
 } from '@/lib/homedata'
+import type { ComparableSale } from '@/lib/homedata'
 import { MARKET_DATA, calcGrossYield, calcNetYield, calcNetMonthlyIncome } from '@/lib/market-data'
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url)
-  const q = searchParams.get('q')
-  const uprn = searchParams.get('uprn')
+// ── HMO Intelligence — Phase 1 ───────────────────────────────────────────────
+interface HmoRecord {
+  uprn?:            string
+  address?:         string
+  postcode?:        string
+  licence_number?:  string
+  licence_type?:    string
+  bedrooms?:        number
+  occupants?:       number
+  licence_start?:   string
+  licence_end?:     string
+  distance_miles?:  number
+}
 
-  if (!process.env.HOMEDATA_API_KEY) {
-    return NextResponse.json({ error: 'HOMEDATA_API_KEY not configured' }, { status: 500 })
+interface HmoResult {
+  isLicensed:          boolean
+  licenceNumber:       string | null
+  licenceType:         string | null
+  licenceExpiry:       string | null
+  nearbyWithin05Miles: number
+  epcCompliant:        boolean | null
+  sizeCompliant:       boolean | null
+  mandatoryLicensing:  boolean
+  verdict:             'licensed' | 'strong_potential' | 'possible' | 'restricted' | 'insufficient_data'
+  hmoScore:            number
+  articleFourSignal:   'likely_restricted' | 'likely_permitted' | 'unknown' | 'not_checked'
+  planningRefusals:    number
+  planningApprovals:   number
+  rawRecords:          HmoRecord[]
+}
+
+function matchHmoAddress(candidateAddress: string, targetAddress: string): boolean {
+  if (!candidateAddress || !targetAddress) return false
+  const normalise = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+  const a = normalise(candidateAddress)
+  const b = normalise(targetAddress)
+  if (a === b) return true
+  // Match on house number + first word of street
+  const numMatch = a.match(/^(\d+[a-z]?)/)
+  if (!numMatch) return false
+  const num = numMatch[1]
+  const streetWordA = a.split(' ')[1] ?? ''
+  const streetWordB = b.split(' ')[1] ?? ''
+  return b.startsWith(num) && streetWordA === streetWordB
+}
+
+// ── REPLACE the entire fetchHmoData function in src/app/api/property/route.ts ──
+// Find: async function fetchHmoData(
+// Replace from that line to the closing } of the function (around line 250)
+
+async function fetchHmoData(
+  postcode:  string,
+  outcode:   string,
+  address:   string,
+  bedrooms:  number,
+  floorArea: number | null,
+  epcRating: string,
+  apiKey:    string,
+): Promise<HmoResult | null> {
+  console.log(`HMO fetch: postcode=${postcode} key=${apiKey?.slice(0,6)}`)
+
+  // ── Helper: parse HMO records from response handling both data formats ────
+  // API returns either { data: HmoRecord[] } or { data: { hmos: HmoRecord[] } }
+  function parseHmoRecords(resp: { status?: string; data?: unknown } | null): HmoRecord[] {
+    if (!resp || resp.status !== 'success') return []
+    const d = resp.data
+    if (Array.isArray(d)) return d as HmoRecord[]
+    if (d && typeof d === 'object' && Array.isArray((d as Record<string,unknown>).hmos))
+      return (d as Record<string,unknown>).hmos as HmoRecord[]
+    return []
   }
 
-  // Phase 1: address search — returns suggestions list
-  if (q && !uprn) {
-    try {
-      const raw = await searchAddressRaw(q)
-      const suggestions = normalise(raw)
-      return NextResponse.json({ suggestions })
-    } catch (e) {
-      console.error('Search error:', e)
-      return NextResponse.json({ suggestions: [] })
-    }
-  }
-
-  // Phase 2: full property fetch by UPRN
-  if (uprn) {
-    try {
-      const [property, epc, transactions, risks] = await Promise.all([
-        getProperty(uprn),
-        getEpc(uprn).catch(() => null),
-        getTransactions(uprn).catch(() => []),
-        getRisks(uprn).catch(() => []),
-      ])
-
-      const prop = property || { uprn, full_address: `UPRN ${uprn}`, address: `UPRN ${uprn}` }
-
-      const cityName = detectCity(
-        String((prop as Record<string,unknown>).town_name || ''),
-        String((prop as Record<string,unknown>).postcode || '')
-      )
-      const cityData = MARKET_DATA.cities[cityName as keyof typeof MARKET_DATA.cities]
-        || MARKET_DATA.cities.London
-
-      const propRecord = prop as Record<string, unknown>
-      const postcode = String(propRecord.postcode || '')
-      const outcode = postcode.split(' ')[0]
-
-      const defaults = {
-        serviceCharge: String(propRecord.property_type || '').toLowerCase().includes('flat') ? 2000 : 0,
-        groundRent: String(propRecord.tenure || '').toLowerCase().includes('leasehold') ? 200 : 0,
-        managementFee: 10,
-        maintenanceAllowance: 1.5,
-        voidWeeks: 2,
-      }
-
-      const estimatedRent = estimateRent(
-        String(propRecord.property_type || ''),
-        Number(propRecord.bedrooms || 1),
-        cityData.avgRent,
-      )
-
-      const price = Number(propRecord.last_sold_price || 0)
-
-      // ── LAND REGISTRY + EPC OPEN DATA — fetched in parallel ──────────────────────
-      const subjectAddr = String(propRecord.full_address || propRecord.address || '')
-      const [lrData, epcOpenData] = await Promise.all([
-        fetchLrData(String(propRecord.postcode || ''), subjectAddr),
-        fetchEpcData(
-          String(propRecord.postcode || ''),
-          subjectAddr,
-          process.env.EPC_API_KEY,
-          process.env.EPC_API_EMAIL,
-        ),
-      ])
-
-      // Use EPC Open Data as fallback when Homedata returns no EPC record
-      const resolvedEpc = epc || epcOpenData.subjectEpc
-
-      const lrLastSold    = lrData.history.length > 0 ? lrData.history[0] : null
-      const lastSoldPrice = lrLastSold ? lrLastSold.price : price
-      const lastSoldDate  = lrLastSold ? lrLastSold.date  : String(propRecord.last_sold_date || '')
-      const allTransactions = lrData.history.length > 0
-        ? lrData.history.map(t => ({ price: t.price, date: t.date, transaction_type: t.type }))
-        : (transactions || []).slice(0, 20)
-
-      // ── COMPARABLE VALUATION ENGINE ───────────────────────────────────────────────
-      const valuation = await calcComparableValuation(
-        uprn,
-        propRecord,
-        cityData,
-        cityName,
-        lrData.comps,
-        epcOpenData.floorAreas,
-        process.env.HOMEDATA_API_KEY!
-      )
-
-      const effectivePrice = price || valuation.fairValue
-
-      const grossYield = effectivePrice ? calcGrossYield(effectivePrice, estimatedRent) : 0
-      const netYield = effectivePrice ? calcNetYield(
-        effectivePrice, estimatedRent,
-        defaults.serviceCharge, defaults.groundRent,
-        defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
-      ) : 0
-
-      const floodRisk = (risks || []).find((r: Record<string,unknown>) => r.risk_type === 'flood_rivers_sea')
-
-      return NextResponse.json({
-        uprn,
-        property: {
-          ...prop,
-          last_sold_price: lastSoldPrice,
-          last_sold_date: lastSoldDate,
-        },
-        epc: resolvedEpc,
-        transactions: allTransactions,
-        risks: risks || [],
-        cityData,
-        cityName,
-        enriched: {
-          estimatedRent,
-          estimatedCurrentValue: valuation.fairValue,
-          valuationLow: valuation.lowValue,
-          valuationHigh: valuation.highValue,
-          valuationConfidence: valuation.confidence,
-          valuationCompsUsed: valuation.compsUsed,
-          grossYield,
-          netYield,
-          netMonthly: effectivePrice ? calcNetMonthlyIncome(
-            effectivePrice, estimatedRent,
-            defaults.serviceCharge, defaults.groundRent,
-            defaults.managementFee, defaults.maintenanceAllowance, defaults.voidWeeks
-          ) : 0,
-          capitalGrowth: cityData.capitalGrowth1yr,
-          totalROI: parseFloat((netYield + cityData.capitalGrowth1yr).toFixed(1)),
-          floodRisk: floodRisk ? String((floodRisk as Record<string,unknown>).label) : 'Unknown',
-          epcRating: resolvedEpc?.current_energy_efficiency
-            ? efficiencyToRating(resolvedEpc.current_energy_efficiency as number)
-            : resolvedEpc?.current_energy_rating
-              ? String(resolvedEpc.current_energy_rating)
-              : String(propRecord.current_energy_rating || 'Unknown'),
-          epcFloorArea: resolvedEpc?.total_floor_area || propRecord.internal_area_sqm || propRecord.epc_floor_area || null,
-          defaults,
-        },
-      })
-    } catch (e) {
-      console.error('Property fetch error:', e)
-      return NextResponse.json({ error: 'Failed to fetch property data' }, { status: 500 })
-    }
-  }
-
-  return NextResponse.json({ error: 'Provide q (search) or uprn' }, { status: 400 })
-}
-
-// ── Raw address search ────────────────────────────────────────────────────────
-async function searchAddressRaw(query: string): Promise<unknown> {
-  const url = `https://api.homedata.co.uk/api/address/find/?q=${encodeURIComponent(query)}`
-  const res = await fetch(url, {
-    headers: { Authorization: `Api-Key ${process.env.HOMEDATA_API_KEY}` },
-    cache: 'no-store',
-  })
-  if (!res.ok) {
-    console.error('Homedata search failed:', res.status, await res.text())
-    return { suggestions: [] }
-  }
-  const data = await res.json()
-  console.log('Homedata search response keys:', Object.keys(data), 'count:', data.count)
-  return data
-}
-
-// ── Normalise Homedata suggestions ───────────────────────────────────────────
-function normalise(raw: unknown): Array<{ uprn: string; full_address: string; address: string; postcode: string }> {
-  if (!raw || typeof raw !== 'object') return []
-  const obj = raw as Record<string, unknown>
-
-  let items: unknown[] = []
-
-  if (Array.isArray(obj)) {
-    items = obj
-  } else if (Array.isArray(obj.suggestions)) {
-    items = obj.suggestions as unknown[]
-  } else if (Array.isArray(obj.results)) {
-    items = obj.results as unknown[]
-  } else if (Array.isArray(obj.addresses)) {
-    items = obj.addresses as unknown[]
-  } else if (Array.isArray(obj.data)) {
-    items = obj.data as unknown[]
-  }
-
-  return items
-    .filter(item => item && typeof item === 'object')
-    .map(item => {
-      const i = item as Record<string, unknown>
-      const uprn = String(i.uprn ?? i.UPRN ?? i.id ?? '')
-      const address = String(i.address ?? i.full_address ?? i.display_address ?? i.line1 ?? '')
-      const town = String(i.town ?? i.town_name ?? '')
-      const postcode = String(i.postcode ?? i.post_code ?? '')
-      const full_address = address || `${town} ${postcode}`.trim()
-      return { uprn, full_address, address: full_address, postcode }
-    })
-    .filter(s => s.uprn && s.full_address)
-}
-
-function detectCity(town: string, postcode: string): string {
-  const t = (town || '').toLowerCase()
-  const pc = (postcode || '').toUpperCase().trim()
-  const outward = pc.split(' ')[0]
-
-  const londonPrefixes = ['EC','WC','SW','SE','NW','W1','W2','W3','W4','W5','W6','W7','W8','W9','N1','N2','N3','N4','N5','N6','N7','N8','N9','E1','E2','E3','E4','E5','E6','E7','E8','E9','BR','CR','DA','EN','HA','IG','KT','RM','SM','TW','UB','WD']
-  const londonSinglePrefixes = ['E','N','W']
-
-  if (
-    t.includes('london') ||
-    londonPrefixes.some(p => outward.startsWith(p)) ||
-    londonSinglePrefixes.some(p => outward.startsWith(p) && outward.length >= 2)
-  ) return 'London'
-
-  if (t.includes('bristol') || outward.startsWith('BS')) return 'Bristol'
-  if (t.includes('nottingham') || outward.startsWith('NG')) return 'Nottingham'
-  if (t.includes('leeds') || outward.startsWith('LS')) return 'Leeds'
-  if (t.includes('sheffield') || (outward.startsWith('S') && !outward.startsWith('SK') && !outward.startsWith('SM'))) return 'Sheffield'
-  if (t.includes('liverpool') || (outward.startsWith('L') && !outward.startsWith('LS'))) return 'Liverpool'
-  if (t.includes('birmingham') || t.includes('solihull') || t.includes('wolverhampton') ||
-    (outward.startsWith('B') && !outward.startsWith('BR') && !outward.startsWith('BS'))) return 'Birmingham'
-  if (t.includes('manchester') || t.includes('salford') || t.includes('stockport') ||
-    outward.startsWith('M') || outward.startsWith('SK')) return 'Manchester'
-
-  return 'London'
-}
-
-function estimateRent(propertyType: string, beds: number, cityAvgRent: number): number {
-  const bedMultiplier: Record<number, number> = {
-    0: 0.55,
-    1: 0.75,
-    2: 1.00,
-    3: 1.35,
-    4: 1.70,
-    5: 2.10,
-  }
-  const isHmo = propertyType?.toLowerCase().includes('hmo')
-  const multiplier = isHmo ? (beds * 0.55) : (bedMultiplier[beds] || 1)
-  return Math.round(cityAvgRent * multiplier / 50) * 50
-}
-
-function efficiencyToRating(score: number): string {
-  if (score >= 92) return 'A'
-  if (score >= 81) return 'B'
-  if (score >= 69) return 'C'
-  if (score >= 55) return 'D'
-  if (score >= 39) return 'E'
-  if (score >= 21) return 'F'
-  return 'G'
-}
-
-// ── COMPARABLE VALUATION ENGINE ───────────────────────────────────────────────
-interface ValuationResult {
-  fairValue: number
-  lowValue: number
-  highValue: number
-  confidence: number
-  compsUsed: number
-  method: string
-}
-
-function getTypicalFloorArea(propertyType: string): number {
-  const t = propertyType.toLowerCase()
-  if (t.includes('flat') || t.includes('maisonette') || t.includes('apartment')) return 60
-  if (t.includes('semi')) return 88
-  if (t.includes('terrace')) return 80
-  if (t.includes('detached') && !t.includes('semi')) return 110
-  return 80
-}
-
-function normPropertyType(t: string): string {
-  const tl = t.toLowerCase()
-  if (tl.includes('flat') || tl.includes('maisonette') || tl.includes('apartment')) return 'flat'
-  if (tl.includes('semi')) return 'semi'
-  if (tl.includes('detach')) return 'detached'
-  return 'terraced'
-}
-
-async function calcComparableValuation(
-  _uprn: string,
-  prop: Record<string, unknown>,
-  cityData: Record<string, number>,
-  cityName: string,
-  lrComps: LrTransaction[],
-  epcData: Map<string, number>,
-  apiKey: string
-): Promise<ValuationResult> {
-
-  const subjectArea   = Number(prop.internal_area_sqm || prop.epc_floor_area || 0)
-  const subjectType   = String(prop.property_type || '').toLowerCase()
-  const subjectBeds   = Number(prop.bedrooms || 2)
-  const subjectTenure = String(prop.tenure || '').toLowerCase()
-  const subjectEpc    = String(prop.current_energy_rating || 'D')
-  const hasParking    = Boolean(prop.has_parking)
-  const hasGarden     = Boolean(prop.has_garden)
-  const outcode       = String(prop.postcode || '').split(' ')[0]
-
-  let featureAdj = 1.0
-  if      (subjectEpc === 'A' || subjectEpc === 'B') featureAdj += 0.02
-  else if (subjectEpc === 'E') featureAdj -= 0.02
-  else if (subjectEpc === 'F') featureAdj -= 0.04
-  else if (subjectEpc === 'G') featureAdj -= 0.05
-  if (hasParking)  featureAdj += 0.03
-  if (hasGarden)   featureAdj += 0.02
-  if (subjectTenure.includes('leasehold')) featureAdj -= 0.01
-
-  const effectiveArea = subjectArea > 0 ? subjectArea : estimateFloorArea(subjectBeds, subjectType)
-  const annualRate    = Math.max(0.005, (cityData.capitalGrowth5yr / 5) / 100)
-  const now           = Date.now()
-
-  // ── FALLBACK ─────────────────────────────────────────────────────────────────
-  const fallback = (): ValuationResult => {
-    const soldPrice = Number(prop.last_sold_price || 0)
-    if (soldPrice) {
-      const soldYear  = Number(String(prop.last_sold_date || '2015').slice(0, 4))
-      const yearsHeld = Math.max(0, 2026 - soldYear)
-      const fair = Math.round(soldPrice * Math.pow(1 + annualRate, yearsHeld))
-      return { fairValue: fair, lowValue: Math.round(fair * 0.95), highValue: Math.round(fair * 1.05), confidence: 40, compsUsed: 0, method: 'growth_rate_fallback' }
-    }
-    const beds = Number(prop.bedrooms || 2)
-    const cityByBed = MARKET_DATA.cityByBedroom[cityName as keyof typeof MARKET_DATA.cityByBedroom]
-    const bedKey = beds === 0 ? 'studio' : beds === 1 ? '1bed' : beds === 2 ? '2bed' : beds === 3 ? '3bed' : '4bed'
-    const bedData = cityByBed?.[bedKey as keyof typeof cityByBed]
-    const fair = bedData?.avgPrice || cityData.avgPrice as number || 0
-    if (!fair) return { fairValue: 0, lowValue: 0, highValue: 0, confidence: 0, compsUsed: 0, method: 'none' }
-    return { fairValue: fair, lowValue: Math.round(fair * 0.90), highValue: Math.round(fair * 1.10), confidence: 25, compsUsed: 0, method: 'city_avg_estimate' }
-  }
-
-  // ── TIER 1: LAND REGISTRY POSTCODE COMPARABLES ───────────────────────────────
-  if (lrComps.length >= 2) {
-    const subjectNorm  = normPropertyType(subjectType)
-    const sameType     = lrComps.filter(c => normPropertyType(c.type) === subjectNorm)
-    const workingComps = sameType.length >= 2 ? sameType : lrComps
-
-    const compPsqm = workingComps.map(c => {
-      const yearsAgo  = (now - new Date(c.date).getTime()) / (365.25 * 24 * 3600 * 1000)
-      const adjPrice  = c.price * Math.pow(1 + annualRate, Math.max(0, yearsAgo))
-      const compArea  = epcData.get(c.address.trim().split(/[\s,]/)[0].toLowerCase()) || getTypicalFloorArea(c.type)
-      return adjPrice / compArea
-    }).filter(v => v > 0 && v < 30000).sort((a, b) => a - b)
-
-    if (compPsqm.length >= 2) {
-      const mid        = Math.floor(compPsqm.length / 2)
-      const medianPsqm = compPsqm.length % 2 === 0
-        ? (compPsqm[mid - 1] + compPsqm[mid]) / 2
-        : compPsqm[mid]
-
-      const epcHits   = workingComps.filter(c => epcData.has(c.address.trim().split(/[\s,]/)[0].toLowerCase())).length
-      const baseValue = Math.round(medianPsqm * effectiveArea * featureAdj)
-      const fair      = Math.round(baseValue / 1000) * 1000
-
-      const confidence = Math.min(88,
-        50 + compPsqm.length * 4 +
-        (sameType.length >= 2 ? 5 : 0) +
-        (subjectArea > 0 ? 8 : 0) +
-        Math.min(epcHits * 3, 12)
-      )
-      const spread = confidence >= 78 ? 0.05 : confidence >= 65 ? 0.07 : 0.10
-
-      console.log(`LR Comps: £${fair.toLocaleString()} (${compPsqm.length} comps, ${epcHits} EPC-backed, ${confidence}% conf, £${Math.round(medianPsqm)}/sqm × ${effectiveArea}sqm)`)
-      return {
-        fairValue: fair,
-        lowValue:  Math.round(fair * (1 - spread) / 1000) * 1000,
-        highValue: Math.round(fair * (1 + spread) / 1000) * 1000,
-        confidence,
-        compsUsed: compPsqm.length,
-        method: `lr_postcode_comparables${epcHits > 0 ? '_epc' : ''}`,
-      }
-    }
-  }
-
-  // ── TIER 2: HOMEDATA PRICE TRENDS ────────────────────────────────────────────
-  if (outcode) {
-    try {
-      const trendsUrl = `https://api.homedata.co.uk/api/price_trends/${encodeURIComponent(outcode)}/`
-      const res = await fetch(trendsUrl, { headers: { Authorization: `Api-Key ${apiKey}` }, cache: 'no-store' })
-
-      if (res.ok) {
-        const trendsData = await res.json()
-        const monthlyPrices: Record<string, unknown>[] = (
-          trendsData?.monthly_average_prices ||
-          trendsData?.data?.monthly_average_prices ||
-          trendsData?.results?.monthly_average_prices ||
-          []
-        )
-        const prices = monthlyPrices.slice(-12)
-          .map(m => Number(m.average_price ?? m.avg_price ?? m.price ?? m.value ?? 0))
-          .filter(p => p > 50000)
-
-        if (prices.length >= 3) {
-          const avgPrice    = prices.reduce((s, p) => s + p, 0) / prices.length
-          const pricePerSqm = avgPrice / getTypicalFloorArea(subjectType)
-          const baseValue   = Math.round(pricePerSqm * effectiveArea * featureAdj)
-          const fair        = Math.round(baseValue / 1000) * 1000
-          let confidence    = 55 + (prices.length >= 9 ? 10 : 0) + (prices.length >= 12 ? 5 : 0) + (subjectArea > 0 ? 10 : -5)
-          confidence = Math.min(82, Math.max(40, confidence))
-          const spread = confidence >= 75 ? 0.05 : 0.08
-
-          console.log(`Homedata Trends: £${fair.toLocaleString()} (${prices.length} months, ${confidence}% conf)`)
-          return { fairValue: fair, lowValue: Math.round(fair * (1 - spread) / 1000) * 1000, highValue: Math.round(fair * (1 + spread) / 1000) * 1000, confidence, compsUsed: prices.length, method: 'homedata_price_trends' }
-        }
-      }
-    } catch (e) {
-      console.error('Homedata price_trends error:', e)
-    }
-  }
-
-  return fallback()
-}
-
-function estimateFloorArea(beds: number, type: string): number {
-  const t = type.toLowerCase()
-  const base: Record<number, number> = { 0: 35, 1: 50, 2: 70, 3: 90, 4: 115, 5: 140 }
-  const area = base[Math.min(beds, 5)] || 70
-  if (t.includes('detached') && !t.includes('semi')) return Math.round(area * 1.2)
-  return area
-}
-
-// ── EPC OPEN DATA ─────────────────────────────────────────────────────────────
-interface EpcResult {
-  floorAreas: Map<string, number>
-  subjectEpc: Record<string, unknown> | null
-}
-
-async function fetchEpcData(
-  postcode: string,
-  subjectAddress: string,
-  apiKey?: string,
-  apiEmail?: string,
-): Promise<EpcResult> {
-  const empty: EpcResult = { floorAreas: new Map(), subjectEpc: null }
-  if (!postcode || !apiKey || !apiEmail) return empty
-
-  try {
-    const url = `https://epc.opendatacommunities.org/api/v1/domestic/search?postcode=${encodeURIComponent(postcode)}&size=50`
-    const auth = Buffer.from(`${apiEmail}:${apiKey}`).toString('base64')
-    const res  = await fetch(url, {
-      headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
-      cache: 'no-store',
-      signal: abortAfter(8000),
-    })
-    if (!res.ok) {
-      console.log(`EPC API: ${res.status} for ${postcode}`)
-      return empty
-    }
-
-    const data = await res.json()
-    const cols = (data['column-names'] || []) as string[]
-    const rows = (data.rows || []) as string[][]
-
-    const col = (name: string) => cols.indexOf(name)
-    const addrIdx   = col('address1')
-    const areaIdx   = col('total-floor-area')
-    const ratingIdx = col('current-energy-rating')
-    const scoreIdx  = col('current-energy-efficiency')
-    const potRatIdx = col('potential-energy-rating')
-    const potScoIdx = col('potential-energy-efficiency')
-    const dateIdx   = col('lodgement-date')
-    const inspIdx   = col('inspection-date')
-
-    const subjectToken = subjectAddress.trim().split(/[\s,]/)[0].toLowerCase().replace(/\D/g, '') ||
-                         subjectAddress.trim().split(/[\s,]/)[0].toLowerCase()
-
-    const floorAreas = new Map<string, number>()
-    let subjectEpc: Record<string, unknown> | null = null
-    let subjectEpcDate = ''
-
-    for (const row of rows) {
-      const addr = String(row[addrIdx] || '').trim()
-      const area = Number(row[areaIdx] || 0)
-      if (!addr) continue
-
-      const key = addr.split(/[\s,]/)[0].toLowerCase()
-      if (area > 0) floorAreas.set(key, area)
-
-      const rowToken  = key.replace(/\D/g, '') || key
-      const isSubject = subjectToken && (rowToken === subjectToken || key === subjectToken)
-      const rowDate   = String(row[dateIdx] || row[inspIdx] || '')
-
-      if (isSubject && (!subjectEpc || rowDate > subjectEpcDate)) {
-        subjectEpcDate = rowDate
-        subjectEpc = {
-          current_energy_rating:       String(row[ratingIdx] || ''),
-          current_energy_efficiency:   Number(row[scoreIdx] || 0),
-          potential_energy_rating:     String(row[potRatIdx] || ''),
-          potential_energy_efficiency: Number(row[potScoIdx] || 0),
-          total_floor_area:            area,
-          inspection_date:             rowDate,
-          source:                      'epc_open_data',
-        }
-      }
-    }
-
-    console.log(`EPC: ${floorAreas.size} floor areas, subject matched: ${!!subjectEpc}`)
-    return { floorAreas, subjectEpc }
-  } catch (e) {
-    console.error('EPC floor area fetch error:', e)
-    return empty
-  }
-}
-
-// ── LAND REGISTRY DATA ────────────────────────────────────────────────────────
-interface LrTransaction {
-  price: number
-  date: string
-  type: string
-  address: string
-}
-
-function abortAfter(ms: number): AbortSignal {
-  const ctrl = new AbortController()
-  setTimeout(() => ctrl.abort(), ms)
-  return ctrl.signal
-}
-
-async function fetchLrData(
-  postcode: string,
-  address: string,
-): Promise<{ history: LrTransaction[]; comps: LrTransaction[] }> {
-  const empty = { history: [], comps: [] }
-  if (!postcode) return empty
-
-  try {
-    const url = `http://landregistry.data.gov.uk/data/ppi/address.json?postcode=${encodeURIComponent(postcode)}&_pageSize=50`
-    const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' })
-    if (!res.ok) return empty
-
-    const data = await res.json()
-    const addresses: Record<string, unknown>[] = (data?.result as Record<string, unknown>)?.items || []
-    console.log(`LR: ${addresses.length} addresses in ${postcode}`)
-
-    const houseNumber = address.trim().split(' ')[0].replace(/\D/g, '')
-    const twoYearsAgo = new Date(Date.now() - 730 * 24 * 3600 * 1000).toISOString().slice(0, 10)
-
-    const fetchAddrTxns = async (addr: Record<string, unknown>): Promise<{ paon: string; isSubject: boolean; txns: LrTransaction[] }> => {
-      const paon      = String(addr.paon || '')
-      const addrUrl   = String(addr._about || '')
-      const isSubject = Boolean(houseNumber && paon && paon.includes(houseNumber))
-      if (!addrUrl) return { paon, isSubject, txns: [] }
-
+  // ── Fetch planning, rents and initial HMO register concurrently ───────────
+  const [hmoRes, planningRes, rentsRes] = await Promise.allSettled([
+    fetch(
+      `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
+      { cache: 'no-store' }
+    ),
+    fetch(
+      `https://api.propertydata.co.uk/planning-applications?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
+      { cache: 'no-store' }
+    ),
+    fetch(
+      `https://api.propertydata.co.uk/rents?key=${apiKey}&postcode=${encodeURIComponent(outcode)}`,
+      { cache: 'no-store' }
+    ),
+  ])
+
+  // Process HMO register response
+  console.log(`HMO register raw: fulfilled=${hmoRes.status === 'fulfilled'} httpStatus=${hmoRes.status === 'fulfilled' ? hmoRes.value.status : 'n/a'} ok=${hmoRes.status === 'fulfilled' ? hmoRes.value.ok : 'n/a'}`)
+  const hmoResponse = hmoRes.status === 'fulfilled' && hmoRes.value.ok
+    ? await hmoRes.value.json() as { status?: string; data?: unknown }
+    : null
+
+  // Process planning applications response
+  const planningResponse = planningRes.status === 'fulfilled' && planningRes.value.ok
+    ? await planningRes.value.json() as { status?: string; data?: Array<Record<string, unknown>> }
+    : null
+
+  console.log(`Planning applications for ${postcode}: status=${planningResponse?.status} count=${Array.isArray(planningResponse?.data) ? planningResponse.data.length : 0}`)
+
+  // Parse rents response
+  const rentsResponse = rentsRes.status === 'fulfilled' && rentsRes.value.ok
+    ? await rentsRes.value.json() as { status?: string; data?: { long_let?: { average?: number; raw_data?: Array<{ bedrooms?: number | null; price?: number }> } } }
+    : null
+
+  // Filter raw listings by bedroom count for accuracy, fall back to district average
+  const rawListings = rentsResponse?.data?.long_let?.raw_data ?? []
+  console.log(`Rents filter: bedrooms=${bedrooms} type=${typeof bedrooms} rawCount=${rawListings.length} bedroomMatch=${rawListings.filter(l => l.bedrooms === bedrooms).length}`)
+  const bedroomListings = rawListings.filter(l => l.bedrooms === bedrooms && typeof l.price === 'number')
+  const fallbackListings = rawListings.filter(l => typeof l.price === 'number')
+  const relevantListings = bedroomListings.length >= 3 ? bedroomListings : fallbackListings
+  const weeklyRent = relevantListings.length > 0
+    ? relevantListings.reduce((sum, l) => sum + (l.price ?? 0), 0) / relevantListings.length
+    : (rentsResponse?.status === 'success' ? rentsResponse?.data?.long_let?.average ?? null : null)
+  const monthlyWhole = weeklyRent ? weeklyRent * 52 / 12 : null
+  const sharedRoomRent   = monthlyWhole ? Math.round(monthlyWhole * 0.38) : null
+  const ensuiteRoomRent  = monthlyWhole ? Math.round(monthlyWhole * 0.48) : null
+  const singleLetMonthly = monthlyWhole ? Math.round(monthlyWhole) : null
+
+  console.log(`HMO register response: status=${hmoResponse?.status} keys=${JSON.stringify(Object.keys(hmoResponse || {}))}`)
+  if (!hmoResponse || hmoResponse.status !== 'success') return null
+
+  // ── Radius fallback: if no records at default radius, retry with expanding radii ──
+  // Each level applies a distance weight to the nearby count to penalise lower locality
+  // Weight: 1.0 = exact postcode, 0.8 = 0.5mi, 0.6 = 1mi, 0.4 = 1.5mi
+  type RadiusResult = { records: HmoRecord[]; distanceWeight: number; radiusUsed: number | null }
+
+  const initialRecords = parseHmoRecords(hmoResponse)
+  let radiusResult: RadiusResult = { records: initialRecords, distanceWeight: 1.0, radiusUsed: null }
+
+  if (initialRecords.length === 0) {
+    // Try expanding radii sequentially until we find records
+    const radiiToTry: Array<{ radius: number; weight: number }> = [
+      { radius: 0.5, weight: 0.8 },
+      { radius: 1.0, weight: 0.6 },
+      { radius: 1.5, weight: 0.4 },
+    ]
+    for (const { radius, weight } of radiiToTry) {
       try {
-        const txRes = await fetch(`${addrUrl}.json`, {
-          headers: { Accept: 'application/json' },
-          cache: 'no-store',
-          signal: abortAfter(7000),
-        })
-        if (!txRes.ok) return { paon, isSubject, txns: [] }
-
-        const txData   = await txRes.json()
-        const topic    = (txData?.result as Record<string, unknown>)?.primaryTopic as Record<string, unknown>
-        const rawDates = topic?.soldDate
-        if (!rawDates) return { paon, isSubject, txns: [] }
-
-        const list = Array.isArray(rawDates) ? rawDates : [rawDates]
-        const txns: LrTransaction[] = list
-          .filter(Boolean)
-          .map((tx: unknown) => ({
-            price:   Number((tx as Record<string, unknown>).pricePaid || 0),
-            date:    String((tx as Record<string, unknown>).transactionDate || ''),
-            type:    String((tx as Record<string, unknown>).propertyType || '').split('/').pop() || '',
-            address: paon,
-          }))
-          .filter(t => t.price > 0)
-
-        return { paon, isSubject, txns }
+        const fallbackRes = await fetch(
+          `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}&radius=${radius}`,
+          { cache: 'no-store' }
+        )
+        if (!fallbackRes.ok) continue
+        const fallbackData = await fallbackRes.json() as { status?: string; data?: unknown }
+        const fallbackRecords = parseHmoRecords(fallbackData)
+        console.log(`HMO radius fallback ${radius}mi: found ${fallbackRecords.length} records (weight=${weight})`)
+        if (fallbackRecords.length > 0) {
+          radiusResult = { records: fallbackRecords, distanceWeight: weight, radiusUsed: radius }
+          break
+        }
       } catch {
-        return { paon, isSubject, txns: [] }
+        // silent — continue to next radius
       }
     }
+  }
 
-    const settled = await Promise.allSettled(addresses.slice(0, 25).map(fetchAddrTxns))
+  const records = radiusResult.records
+  const distanceWeight = radiusResult.distanceWeight
 
-    const history: LrTransaction[] = []
-    const comps:   LrTransaction[] = []
+  // 1. Is THIS property licensed?
+  const thisRecord = records.find(r => matchHmoAddress(r.address ?? '', address))
+  const isLicensed = !!thisRecord
 
-    for (const r of settled) {
-      if (r.status !== 'fulfilled') continue
-      const { isSubject, txns } = r.value
-      if (isSubject) {
-        history.push(...txns)
-      } else {
-        comps.push(...txns.filter(t => t.date >= twoYearsAgo))
-      }
+  // 2. Nearby count — weighted by distance when radius fallback was used
+  const rawNearbyCount = records.filter(r =>
+    !matchHmoAddress(r.address ?? '', address) &&
+    (r.distance_miles == null || r.distance_miles <= (radiusResult.radiusUsed ?? 0.5))
+  ).length
+  const nearbyWithin05Miles = Math.round(rawNearbyCount * distanceWeight)
+
+  // 3. EPC compliance — F/G are ineligible
+  const epcUpper = epcRating?.toUpperCase()
+  const epcCompliant = epcUpper && epcUpper !== 'UNKNOWN'
+    ? !['F', 'G'].includes(epcUpper)
+    : null
+
+  // 4. Size compliance — total floor area ÷ bedrooms ≥ 6.51m²
+  const sizeCompliant = floorArea && bedrooms > 0
+    ? (floorArea / bedrooms) >= 6.51
+    : null
+
+  // 5. Mandatory licensing threshold
+  const mandatoryLicensing = bedrooms >= 5
+
+  // Article 4 Direction — scan planning applications for HMO signals
+  let articleFourSignal: HmoResult['articleFourSignal'] = 'unknown'
+  let planningRefusals = 0
+  let planningApprovals = 0
+
+  if (planningResponse?.status === 'success' && Array.isArray(planningResponse?.data)) {
+    const applications = planningResponse.data
+    const threeYearsAgo = new Date()
+    threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
+
+    const hmoKeywords = [
+      'hmo', 'house in multiple occupation', 'article 4',
+      'c3 to c4', 'change of use', 'sui generis',
+      'permitted development', 'multiple occupancy'
+    ]
+    const restrictionKeywords = [
+      'article 4', 'refused', 'refusal', 'not permitted',
+      'planning permission required', 'permitted development removed'
+    ]
+    const approvalKeywords = [
+      'approved', 'granted', 'permitted', 'allowed'
+    ]
+
+    for (const app of applications) {
+      const description = String(app.description || app.proposal || '').toLowerCase()
+      const decision    = String(app.decision || app.status || '').toLowerCase()
+      const dateStr     = String(app.decision_date || app.date || '')
+      const appDate     = dateStr ? new Date(dateStr) : null
+
+      // Only consider applications from last 3 years
+      if (appDate && appDate < threeYearsAgo) continue
+
+      // Check if this application is HMO-related
+      const isHmoRelated = hmoKeywords.some(kw => description.includes(kw))
+      if (!isHmoRelated) continue
+
+      const isRefusal  = restrictionKeywords.some(kw => decision.includes(kw) || description.includes(kw))
+      const isApproval = approvalKeywords.some(kw => decision.includes(kw))
+
+      if (isRefusal) planningRefusals++
+      else if (isApproval) planningApprovals++
     }
 
-    history.sort((a, b) => b.date.localeCompare(a.date))
-    console.log(`LR: ${history.length} subject txns, ${comps.length} postcode comps (last 24mo)`)
+    if (planningRefusals >= 2) {
+      articleFourSignal = 'likely_restricted'
+    } else if (planningApprovals >= 2 && planningRefusals === 0) {
+      articleFourSignal = 'likely_permitted'
+    } else {
+      articleFourSignal = 'unknown'
+    }
 
-    return { history, comps }
-  } catch (e) {
-    console.error('LR data error:', e)
-    return empty
+    console.log(`Article 4 signal for ${postcode}: ${articleFourSignal} (${planningRefusals} refusals, ${planningApprovals} approvals)`)
+  } else {
+    // No planning data available — mark as not checked only when API key was used but no data returned
+    articleFourSignal = planningResponse === null ? 'not_checked' : 'unknown'
+    console.log(`Article 4 signal: ${articleFourSignal} (${planningRefusals} refusals, ${planningApprovals} approvals)`)
+  }
+
+  // 6. HMO Score (0–100)
+  // nearbyWithin05Miles is already distance-weighted so scoring remains unchanged
+  let score = 0
+  if (isLicensed)                     score += 40
+  if (nearbyWithin05Miles >= 5)        score += 20
+  else if (nearbyWithin05Miles >= 2)   score += 10
+  if (epcCompliant === true)           score += 15
+  if (bedrooms >= 4)                   score += 15
+  else if (bedrooms >= 3)              score += 8
+  if (sizeCompliant === true)          score += 10
+  if (articleFourSignal === 'likely_restricted')     score -= 20
+  else if (articleFourSignal === 'likely_permitted') score += 10
+  const hmoScore = Math.min(100, Math.max(0, score))
+
+  // 7. Verdict
+  let verdict: HmoResult['verdict']
+  if (articleFourSignal === 'likely_restricted' && !isLicensed) {
+    verdict = 'restricted'
+  } else if (isLicensed) {
+    verdict = 'licensed'
+  } else if (epcCompliant === false) {
+    verdict = 'restricted'
+  } else if (hmoScore >= 60 && bedrooms >= 3) {
+    verdict = 'strong_potential'
+  } else if (hmoScore >= 30 || nearbyWithin05Miles > 0) {
+    verdict = 'possible'
+  } else {
+    verdict = 'insufficient_data'
+  }
+
+  return {
+    isLicensed,
+    licenceNumber:       thisRecord?.licence_number ?? null,
+    licenceType:         thisRecord?.licence_type   ?? null,
+    licenceExpiry:       thisRecord?.licence_end    ?? null,
+    nearbyWithin05Miles,
+    epcCompliant,
+    sizeCompliant,
+    mandatoryLicensing,
+    verdict,
+    hmoScore,
+    articleFourSignal,
+    planningRefusals,
+    planningApprovals,
+    rawRecords:          records.slice(0, 10),
+    sharedRoomRent,
+    ensuiteRoomRent,
+    singleLetMonthly,
   }
 }
+// redeploy Tue  2 Jun 2026 07:18:05 BST
