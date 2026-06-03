@@ -154,6 +154,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
   const [annualMortgageInterest, setAnnualMortgageInterest] = useState(0)
   const [showSection24, setShowSection24] = useState(false)
   const [bedroomsOverride, setBedroomsOverride] = useState<number | null>(null)
+  const [priceBasis, setPriceBasis] = useState<'asking' | 'estimated'>('asking')
   const [editingBeds, setEditingBeds] = useState(false)
   const [ownershipType, setOwnershipType] = useState<'personal' | 'company'>('personal')
   const [extractionMethod, setExtractionMethod] = useState<ExtractionMethod>('dividends')
@@ -735,20 +736,35 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-4 mb-6">
                   <div className="col-span-2 lg:col-span-1 bg-white border border-[#E7E5DD] rounded-2xl p-5 shadow-[0_8px_24px_rgba(17,24,39,0.05)]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">
-                      {isLiveListing ? 'Asking Price' : 'Estimated Current Value'}
-                    </p>
+                    {isLiveListing && estimatedCurrentValue > 0 ? (
+                      <div className="flex items-center gap-1 mb-2">
+                        <button type="button" onClick={() => setPriceBasis('asking')}
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors ${priceBasis === 'asking' ? 'bg-[#047857] border-[#047857] text-white' : 'bg-white border-[#E7E5DD] text-[#6B7280] hover:border-[#047857]'}`}>
+                          Asking Price
+                        </button>
+                        <button type="button" onClick={() => setPriceBasis('estimated')}
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors ${priceBasis === 'estimated' ? 'bg-[#047857] border-[#047857] text-white' : 'bg-white border-[#E7E5DD] text-[#6B7280] hover:border-[#047857]'}`}>
+                          Est. Value
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280] mb-2">
+                        {isLiveListing ? 'Asking Price' : 'Estimated Current Value'}
+                      </p>
+                    )}
                     <p className="font-bold text-[38px] leading-none text-[#047857] mb-2"
                       style={{ fontFamily: SERIF, letterSpacing: '-0.03em' }}>
                       {isLiveListing
-                        ? `£${liveAskingPrice.toLocaleString()}`
+                        ? priceBasis === 'asking' ? `£${liveAskingPrice.toLocaleString()}` : estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'
                         : estimatedCurrentValue ? `£${estimatedCurrentValue.toLocaleString()}` : '—'}
                     </p>
                     <div className="flex items-center gap-2 flex-wrap">
                       {isLiveListing ? (
-                        estimatedCurrentValue > 0 && (
-                          <p className="text-xs text-[#6B7280]">Est. Market Value: £{estimatedCurrentValue.toLocaleString()}</p>
-                        )
+                        priceBasis === 'asking' && estimatedCurrentValue > 0
+                          ? <p className="text-xs text-[#6B7280]">Est. Market Value: £{estimatedCurrentValue.toLocaleString()}</p>
+                          : priceBasis === 'estimated' && liveAskingPrice > 0
+                          ? <p className="text-xs text-[#6B7280]">Asking Price: £{liveAskingPrice.toLocaleString()}</p>
+                          : null
                       ) : (
                         <>
                           {bedroomsOverride !== null ? (
