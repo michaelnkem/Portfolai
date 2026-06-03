@@ -1639,7 +1639,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
                 : hmoScore >= 40 ? 'bg-[#FFF7E6] text-[#B7791F]'
                 : 'bg-[#FEF2F2] text-[#DC2626]'
 
-              const noApiKey = !hmo && !hmoVerdict
+              const noApiKey = !hmo && !hmoVerdict && !hmoScore
 
               return (
                 <div className="space-y-5">
