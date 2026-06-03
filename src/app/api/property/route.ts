@@ -65,6 +65,19 @@ async function fetchHmoData(
   apiKey:    string,
 ): Promise<HmoResult | null> {
   console.log(`HMO fetch: postcode=${postcode} key=${apiKey?.slice(0,6)}`)
+
+  // ── Helper: parse HMO records from response handling both data formats ────
+  // API returns either { data: HmoRecord[] } or { data: { hmos: HmoRecord[] } }
+  function parseHmoRecords(resp: { status?: string; data?: unknown } | null): HmoRecord[] {
+    if (!resp || resp.status !== 'success') return []
+    const d = resp.data
+    if (Array.isArray(d)) return d as HmoRecord[]
+    if (d && typeof d === 'object' && Array.isArray((d as Record<string,unknown>).hmos))
+      return (d as Record<string,unknown>).hmos as HmoRecord[]
+    return []
+  }
+
+  // ── Fetch planning, rents and initial HMO register concurrently ───────────
   const [hmoRes, planningRes, rentsRes] = await Promise.allSettled([
     fetch(
       `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}`,
@@ -83,7 +96,7 @@ async function fetchHmoData(
   // Process HMO register response
   console.log(`HMO register raw: fulfilled=${hmoRes.status === 'fulfilled'} httpStatus=${hmoRes.status === 'fulfilled' ? hmoRes.value.status : 'n/a'} ok=${hmoRes.status === 'fulfilled' ? hmoRes.value.ok : 'n/a'}`)
   const hmoResponse = hmoRes.status === 'fulfilled' && hmoRes.value.ok
-    ? await hmoRes.value.json() as { status?: string; data?: Array<Record<string, unknown>> | HmoRecord[] }
+    ? await hmoRes.value.json() as { status?: string; data?: unknown }
     : null
 
   // Process planning applications response
@@ -112,19 +125,57 @@ async function fetchHmoData(
   const ensuiteRoomRent  = monthlyWhole ? Math.round(monthlyWhole * 0.48) : null
   const singleLetMonthly = monthlyWhole ? Math.round(monthlyWhole) : null
 
-  console.log(`HMO register response: status=${hmoResponse?.status} dataIsArray=${Array.isArray(hmoResponse?.data)} keys=${JSON.stringify(Object.keys(hmoResponse || {}))}`)
+  console.log(`HMO register response: status=${hmoResponse?.status} keys=${JSON.stringify(Object.keys(hmoResponse || {}))}`)
   if (!hmoResponse || hmoResponse.status !== 'success') return null
-  const records: HmoRecord[] = Array.isArray(hmoResponse.data) ? hmoResponse.data as HmoRecord[] : []
+
+  // ── Radius fallback: if no records at default radius, retry with expanding radii ──
+  // Each level applies a distance weight to the nearby count to penalise lower locality
+  // Weight: 1.0 = exact postcode, 0.8 = 0.5mi, 0.6 = 1mi, 0.4 = 1.5mi
+  type RadiusResult = { records: HmoRecord[]; distanceWeight: number; radiusUsed: number | null }
+
+  let initialRecords = parseHmoRecords(hmoResponse)
+  let radiusResult: RadiusResult = { records: initialRecords, distanceWeight: 1.0, radiusUsed: null }
+
+  if (initialRecords.length === 0) {
+    // Try expanding radii sequentially until we find records
+    const radiiToTry: Array<{ radius: number; weight: number }> = [
+      { radius: 0.5, weight: 0.8 },
+      { radius: 1.0, weight: 0.6 },
+      { radius: 1.5, weight: 0.4 },
+    ]
+    for (const { radius, weight } of radiiToTry) {
+      try {
+        const fallbackRes = await fetch(
+          `https://api.propertydata.co.uk/national-hmo-register?key=${apiKey}&postcode=${encodeURIComponent(postcode)}&radius=${radius}`,
+          { cache: 'no-store' }
+        )
+        if (!fallbackRes.ok) continue
+        const fallbackData = await fallbackRes.json() as { status?: string; data?: unknown }
+        const fallbackRecords = parseHmoRecords(fallbackData)
+        console.log(`HMO radius fallback ${radius}mi: found ${fallbackRecords.length} records (weight=${weight})`)
+        if (fallbackRecords.length > 0) {
+          radiusResult = { records: fallbackRecords, distanceWeight: weight, radiusUsed: radius }
+          break
+        }
+      } catch {
+        // silent — continue to next radius
+      }
+    }
+  }
+
+  const records = radiusResult.records
+  const distanceWeight = radiusResult.distanceWeight
 
   // 1. Is THIS property licensed?
   const thisRecord = records.find(r => matchHmoAddress(r.address ?? '', address))
   const isLicensed = !!thisRecord
 
-  // 2. Nearby count (within 0.5 miles — API returns distance_miles if available)
-  const nearbyWithin05Miles = records.filter(r =>
+  // 2. Nearby count — weighted by distance when radius fallback was used
+  const rawNearbyCount = records.filter(r =>
     !matchHmoAddress(r.address ?? '', address) &&
-    (r.distance_miles == null || r.distance_miles <= 0.5)
+    (r.distance_miles == null || r.distance_miles <= (radiusResult.radiusUsed ?? 0.5))
   ).length
+  const nearbyWithin05Miles = Math.round(rawNearbyCount * distanceWeight)
 
   // 3. EPC compliance — F/G are ineligible
   const epcUpper = epcRating?.toUpperCase()
@@ -193,12 +244,12 @@ async function fetchHmoData(
 
     console.log(`Article 4 signal for ${postcode}: ${articleFourSignal} (${planningRefusals} refusals, ${planningApprovals} approvals)`)
   } else {
-    // No planning data available — mark as not checked only when API key was used but no data returned
     articleFourSignal = planningResponse === null ? 'not_checked' : 'unknown'
     console.log(`Article 4 signal: ${articleFourSignal} (${planningRefusals} refusals, ${planningApprovals} approvals)`)
   }
 
   // 6. HMO Score (0–100)
+  // nearbyWithin05Miles is already distance-weighted so scoring remains unchanged
   let score = 0
   if (isLicensed)                     score += 40
   if (nearbyWithin05Miles >= 5)        score += 20
@@ -207,8 +258,7 @@ async function fetchHmoData(
   if (bedrooms >= 4)                   score += 15
   else if (bedrooms >= 3)              score += 8
   if (sizeCompliant === true)          score += 10
-  // Article 4 adjustment
-  if (articleFourSignal === 'likely_restricted') score -= 20
+  if (articleFourSignal === 'likely_restricted')  score -= 20
   else if (articleFourSignal === 'likely_permitted') score += 10
   const hmoScore = Math.min(100, Math.max(0, score))
 
