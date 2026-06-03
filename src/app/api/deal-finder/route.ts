@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MARKET_DATA, calcNetYield, calcGrossYield } from '@/lib/market-data'
 
+export const dynamic = 'force-dynamic'
+
 const HD_BASE = 'https://api.homedata.co.uk/api'
 type CityKey = keyof typeof MARKET_DATA.cities
 
@@ -38,7 +40,6 @@ export interface DealCandidate {
   investmentReasons: string[]
   badge: string
   badgeColour: string
-  agentName: string | null
   dataConfidence: number
   source: 'homedata_live_listings'
 }
@@ -279,8 +280,6 @@ interface HomedataListing {
   rent_estimate?: number | null
   estimated_rent?: number | null
   previous_asking_price?: number | null
-  is_withdrawn?: boolean | null
-  street?: string | null
 }
 
 interface HomedataListingsResponse {
@@ -341,77 +340,8 @@ async function fetchLiveListings(
     }
 
     const data = await res.json() as HomedataListingsResponse
-    const raw = data?.results ?? []
-    console.log(`[deal-finder] received ${raw.length} results (total count: ${data?.count ?? '?'})`)
-
-    // Stage 1 — listing status filter
-    const forSale = raw.filter((l: HomedataListing) => {
-      const status = String(l.latest_status || '').toLowerCase()
-      const price  = Number(l.latest_price)
-      if (!price || price <= 0) return false
-      if (l.is_withdrawn)              return false
-      if (status === 'sold stc')       return false
-      if (status === 'under offer')    return false
-      if (status === 'sold')           return false
-      if (status === 'let agreed')     return false
-      if (status === 'let')            return false
-      return true
-    })
-
-    // Stage 2 — data quality filter
-    // Removes marketing listings, price outliers and invalid addresses
-    const GENERIC_KEYWORDS = [
-      'fully managed', 'high yield', 'buy to let', 'investment property',
-      'investment flat', 'investment apartment', 'investment opportunity',
-      'bmv', 'below market', 'managed property', 'city centre investment',
-      'guaranteed rent', 'off plan', 'new development', 'serviced apartment',
-      'student property', 'hmo investment', 'portfolio', 'turnkey',
-      'commercial',
-      'office',
-      'retail',
-      'warehouse',
-      'industrial',
-      'mixed use',
-      'mixed-use',
-      'shop',
-      'restaurant',
-      'hotel',
-      'pub',
-      'bar',
-      'care home',
-      'nursing home',
-      'student accommodation',
-      'block of flats',
-      'development site',
-      'land for sale',
-      'development opportunity',
-    ]
-    const MAX_PRICE = 2_000_000
-    const MIN_PRICE = 40_000
-
-    const results = forSale.filter((l: HomedataListing) => {
-      const price  = Number(l.latest_price)
-      const street = String(l.street || '').toLowerCase().trim()
-
-      if (price > MAX_PRICE) return false
-      if (price < MIN_PRICE) return false
-      if (!street) return false
-      if (GENERIC_KEYWORDS.some(kw => street.includes(kw))) return false
-      if (!/[a-zA-Z]{3,}/.test(street)) return false
-      if (street.length < 4) return false
-
-      // Remove commercial property types
-      const propType = String(l.property_type || '').toLowerCase()
-      const isCommercial = [
-        'commercial', 'office', 'retail', 'warehouse',
-        'industrial', 'land', 'hotel', 'other'
-      ].includes(propType)
-      if (isCommercial) return false
-
-      return true
-    })
-
-    console.log(`Deal Finder quality filter: ${forSale.length} listings → ${results.length} after quality check`)
+    const results = data?.results ?? []
+    console.log(`[deal-finder] received ${results.length} results (total count: ${data?.count ?? '?'})`)
     return { ok: true, results }
   } catch (err) {
     console.error('[deal-finder] live listings fetch error:', err)
@@ -459,7 +389,7 @@ function normaliseListing(
   const id = uprn ?? listingId ?? `dl-${Math.random().toString(36).slice(2)}`
 
   const displayAddress = String(raw.display_address ?? '').trim()
-  const address        = displayAddress || String(raw.postcode ?? '').trim()
+  const address        = displayAddress  // live listings use display_address as canonical address
 
   // Try to extract postcode from display_address; fall back to raw.postcode field if present
   const extractedPostcode = extractPostcode(displayAddress)
@@ -557,28 +487,8 @@ function normaliseListing(
     investmentReasons: fit.reasons,
     badge: fit.badge,
     badgeColour: fit.badgeColour,
-    agentName: raw.agent_name ? String(raw.agent_name) : null,
     dataConfidence: dataFields,
     source: 'homedata_live_listings',
-  }
-}
-
-// ── Postcode fallback for missing street names ────────────────────────────────
-
-async function resolveStreetFromPostcode(postcode: string): Promise<string> {
-  if (!postcode) return ''
-  try {
-    const res = await fetch(
-      `https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`,
-      { cache: 'no-store' },
-    )
-    if (!res.ok) return ''
-    const data = await res.json() as { result?: Record<string, unknown> }
-    const r = data?.result
-    if (!r) return ''
-    return String(r.parish || r.admin_ward || r.parliamentary_constituency || '')
-  } catch {
-    return ''
   }
 }
 
@@ -698,18 +608,6 @@ export async function GET(req: NextRequest) {
     let deals = deduped
       .map(({ listing, sourceCityHint }) => normaliseListing(listing, sourceCityHint, bench))
       .filter((d): d is DealCandidate => d !== null)
-
-    // Resolve missing display addresses via postcodes.io
-    deals = await Promise.all(
-      deals.map(async d => {
-        if (d.displayAddress && d.displayAddress.length > 0) return d
-        const area = await resolveStreetFromPostcode(d.postcode)
-        return {
-          ...d,
-          displayAddress: area ? `${d.postcode} · ${area}` : d.postcode || 'Address unavailable',
-        }
-      })
-    )
 
     // Server-side yield/netYield filter
     if (p.minYield) {
