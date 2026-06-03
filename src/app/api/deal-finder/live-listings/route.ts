@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
+export const dynamic = 'force-dynamic'
+
 const HOMEDATA_BASE_URL = "https://api.homedata.co.uk/api"
 
 function isFullUKPostcode(value: string): boolean {
@@ -172,5 +174,3 @@ export async function GET(req: NextRequest) {
       },
       { status: 500 }
     )
-  }
-}
