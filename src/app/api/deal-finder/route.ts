@@ -419,6 +419,14 @@ async function fetchLiveListings(
       ].includes(propType)
       if (isCommercial) return false
 
+      // Remove ambiguous properties — flats/apartments without a direct UPRN
+      // These risk resolving to the wrong unit in a block during property analysis
+      const hasUprn = l.property_uprn != null && String(l.property_uprn).length > 0
+      const isFlat = ['flat', 'apartment', 'maisonette'].some(t => propType.includes(t)) ||
+        String(l.display_address || '').toLowerCase().includes('flat') ||
+        String(l.display_address || '').toLowerCase().includes('apartment')
+      if (!hasUprn && isFlat) return false
+
       return true
     })
 
