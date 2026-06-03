@@ -260,6 +260,44 @@ async function fetchHmoData(
   if (sizeCompliant === true)          score += 10
   if (articleFourSignal === 'likely_restricted')  score -= 20
   else if (articleFourSignal === 'likely_permitted') score += 10
+
+  // ── Demand signal: postcode & rents based score when register has no data ──
+  // Only applies when radius fallback also found nothing — uses LA_HPI and live
+  // rents to infer HMO viability from market strength. Capped at 35 points so
+  // it never outscores a property with real register data.
+  const noRegisterData = records.length === 0
+  if (noRegisterData) {
+    const outcode = postcode.trim().split(' ')[0].toUpperCase()
+
+    // LA_HPI demand tiers — based on 5yr house price growth as proxy for rental demand
+    // High growth areas = high demand = more viable HMO market
+    const highDemandPrefixes  = ['N1','N4','N5','N6','N7','N8','N16','E1','E2','E3','E8','E9',
+                                  'SE5','SE15','SE22','SE24','SW9','NW1','NW3','NW5',
+                                  'M1','M14','M20','M21','L1','L15','L18','LS1','LS6',
+                                  'B1','B15','S1','S11','NG1','NG7','BS1','BS6']
+    const medDemandPrefixes   = ['N','E','SE','SW','NW','EC','WC','W',
+                                  'EN','RM','DA','IG','HA','CR','BR','KT','TW','UB','SM','WD',
+                                  'M','B','L','LS','S','NG','BS',
+                                  'NE','SR','TS','BD','HX','WF','YO','HU','DE','LE','CV',
+                                  'G','EH','CF','SA']
+
+    const isHighDemand = highDemandPrefixes.some(p => outcode.startsWith(p))
+    const isMedDemand  = !isHighDemand && medDemandPrefixes.some(p => outcode.startsWith(p))
+
+    if      (isHighDemand) score += 25
+    else if (isMedDemand)  score += 15
+    else                   score += 8
+
+    // Live rents bonus — high rents confirm strong rental demand
+    if (weeklyRent !== null) {
+      if      (weeklyRent >= 600) score += 10  // premium rental market
+      else if (weeklyRent >= 400) score += 7   // strong rental market
+      else if (weeklyRent >= 250) score += 4   // moderate rental market
+    }
+
+    console.log(`HMO demand signal: outcode=${outcode} highDemand=${isHighDemand} medDemand=${isMedDemand} weeklyRent=${weeklyRent} scoreAfter=${score}`)
+  }
+
   const hmoScore = Math.min(100, Math.max(0, score))
 
   // 7. Verdict
