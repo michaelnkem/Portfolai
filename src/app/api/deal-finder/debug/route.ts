@@ -1,4 +1,8 @@
+// Diagnostic route — safe to call from browser, never exposes API key
+// GET /api/deal-finder/debug?location=Manchester
 import { NextRequest, NextResponse } from 'next/server'
+
+export const dynamic = 'force-dynamic'
 
 const VARIANTS = [
   'https://api.homedata.co.uk/api',
@@ -6,10 +10,17 @@ const VARIANTS = [
   'https://homedata.co.uk/api',
 ]
 
-async function probe(baseUrl: string, path: string, apiKey: string) {
+async function probe(
+  baseUrl: string,
+  path: string,
+  apiKey: string,
+): Promise<{ url: string; status: number; ok: boolean; body: string }> {
   const url = `${baseUrl}${path}`
   try {
-    const res = await fetch(url, { headers: { Authorization: `Api-Key ${apiKey}`, Accept: 'application/json' }, cache: 'no-store' })
+    const res = await fetch(url, {
+      headers: { Authorization: `Api-Key ${apiKey}`, Accept: 'application/json' },
+      cache: 'no-store',
+    })
     const body = await res.text().catch(() => '')
     return { url, status: res.status, ok: res.ok, body: body.slice(0, 500) }
   } catch (err) {
@@ -19,13 +30,25 @@ async function probe(baseUrl: string, path: string, apiKey: string) {
 
 export async function GET(req: NextRequest) {
   const apiKey = process.env.HOMEDATA_API_KEY
-  if (!apiKey) return NextResponse.json({ error: 'HOMEDATA_API_KEY not set' }, { status: 500 })
+
+  if (!apiKey) {
+    return NextResponse.json({
+      error: 'HOMEDATA_API_KEY is not set in environment variables',
+      fix: 'Add HOMEDATA_API_KEY to your Vercel project environment variables',
+    }, { status: 500 })
+  }
 
   const location = req.nextUrl.searchParams.get('location') || 'Manchester'
+
+  // Step 1 — probe boundary autocomplete across all base URL variants
   const boundaryPath = `/boundaries/autocomplete/?q=${encodeURIComponent(location)}`
-  const boundaryProbes = await Promise.all(VARIANTS.map(base => probe(base, boundaryPath, apiKey)))
+  const boundaryProbes = await Promise.all(
+    VARIANTS.map(base => probe(base, boundaryPath, apiKey))
+  )
+
   const workingBoundary = boundaryProbes.find(p => p.ok)
 
+  // Step 2 — if a boundary probe worked, try live-listings with that base
   let listingProbes: typeof boundaryProbes = []
   let boundaryId: string | null = null
 
@@ -47,7 +70,25 @@ export async function GET(req: NextRequest) {
     apiKeyPresent: true,
     apiKeyPrefix: `${apiKey.slice(0, 6)}…`,
     location,
-    boundaryProbes: boundaryProbes.map(p => ({ url: p.url, status: p.status, ok: p.ok, bodyPreview: p.body.slice(0, 200) })),
+    boundaryProbes: boundaryProbes.map(p => ({
+      url: p.url,
+      status: p.status,
+      ok: p.ok,
+      bodyPreview: p.body.slice(0, 200),
+    })),
     resolvedBoundaryId: boundaryId,
-    listingProbes: listingProbes.map(p => ({ url:
-
+    listingProbes: listingProbes.map(p => ({
+      url: p.url,
+      status: p.status,
+      ok: p.ok,
+      bodyPreview: p.body.slice(0, 300),
+    })),
+    diagnosis: workingBoundary
+      ? boundaryId
+        ? listingProbes[0]?.ok
+          ? 'All good — boundary and listings both working'
+          : `Boundary OK (id=${boundaryId}) but live-listings call failed: ${listingProbes[0]?.status}`
+        : 'Boundary endpoint responded but returned no results'
+      : `All boundary URL variants failed. Check API key and base URL. Statuses: ${boundaryProbes.map(p => p.status).join(', ')}`,
+  })
+}
