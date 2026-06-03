@@ -272,7 +272,7 @@ export function PropertyDetail({ data, onClose, onAI, onAddPortfolio, onAddFavou
   // Yield price basis: asking price (live listing) > estimated current value > last sold price
   const _soldP = Number(p?.last_sold_price ?? 0)
   const yieldPrice =
-    liveAskingPrice > 0
+    liveAskingPrice > 0 && priceBasis === 'asking'
       ? liveAskingPrice
       : estimatedCurrentValue > 0
       ? estimatedCurrentValue
